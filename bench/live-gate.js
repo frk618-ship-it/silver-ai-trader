@@ -44,8 +44,8 @@ async function scenario(name, { history, stooqQuote, yahoo, snapshotFirst = fals
     return r.abort();
   });
   await pg.goto('http://app.local/index.html');
-  const startBtn = snapshotFirst ? 'text=立即開始' : 'text=讀取歷史資料';
-  const fallbackBtn = 'text=等待最新資料再開始';
+  const startBtn = snapshotFirst ? 'button:has-text("立即開始")' : 'button:has-text("讀取歷史資料")';
+  const fallbackBtn = 'button:has-text("等待最新資料再開始")';
   const btn = pg.locator(startBtn).first();
   if (await btn.count() === 0 && !snapshotFirst) await pg.locator(fallbackBtn).first().click({ timeout: 60000 });
   else await btn.click({ timeout: 60000 });
