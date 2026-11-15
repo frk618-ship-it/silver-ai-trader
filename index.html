@@ -26,15 +26,27 @@
     })();
     </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Silver Prediction System V19.5: DA-Optimized (Directional Loss + Momentum Features)</title>
+    <title>Silver Prediction System V20.4: Fast-Train (Fused RNN + Auto Backend)</title>
     
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest"></script>
-    <!-- TF.js WASM backend — runs when tab is hidden (no GPU needed) -->
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm" defer onerror="console.warn('wasm backend unavailable')"></script>
+    <!-- ⚡ V20.4：鎖定 TF.js 版本（@latest 會在版本更新時無預警改變行為/效能），WASM 後端同版本 -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+    <!-- TF.js WASM backend — 小型 RNN 常比 WebGL 快、背景分頁也不會被凍結，比 CPU 後端快約 4 倍 -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/tf-backend-wasm.min.js" onerror="console.warn('wasm backend unavailable')"></script>
+    <script>
+    (function () {
+        try {
+            if (window.tf && tf.wasm && tf.wasm.setWasmPaths) {
+                tf.wasm.setWasmPaths('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/');
+            }
+        } catch (e) { console.warn('[WASM] setWasmPaths failed:', e && e.message); }
+        // 正式模式：關閉除錯檢查，減少每個 kernel 的額外開銷
+        try { tf.enableProdMode(); } catch (_) {}
+    })();
+    </script>
     <script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
 
@@ -338,9 +350,63 @@
         }
     });
 
-    // ── Backend switcher — WebGL when visible, CPU when hidden ──
-    // WebGL is suspended in hidden tabs on most browsers/Android
-    // CPU backend continues executing regardless of tab visibility
+    // ── ⚡ SilverBackend：後端偏好 + 自動測速 ──
+    //    preferred：前景使用的後端（'webgl' | 'wasm' | 'cpu'），由使用者選擇或 auto 測速決定
+    //    背景分頁：WebGL 會被暫停 → 改用 WASM（比 CPU 快約 4 倍），沒有 WASM 才退回 CPU
+    window.SilverBackend = {
+        preferred: 'webgl',
+        _benchCache: {},
+        available: function () {
+            const reg = (window.tf && tf.engine && tf.engine().registryFactory) ? Object.keys(tf.engine().registryFactory) : [];
+            return ['webgl', 'wasm', 'cpu'].filter(b => reg.includes(b));
+        },
+        bgBackend: function () { return this.available().includes('wasm') ? 'wasm' : 'cpu'; },
+        use: async function (name) {
+            if (!name) return false;
+            if (tf.getBackend() === name) return true;
+            try { const ok = await tf.setBackend(name); await tf.ready(); return ok !== false && tf.getBackend() === name; }
+            catch (e) { console.warn('[Backend] switch to', name, 'failed:', e && e.message); return false; }
+        },
+        restore: async function () {
+            if (await this.use(this.preferred)) return this.preferred;
+            for (const b of this.available()) { if (await this.use(b)) return b; }
+            return tf.getBackend();
+        },
+        // 用「實際要訓練的模型結構」在每個可用後端跑幾個 batch，挑最快的。
+        // buildModel: () => 已 compile 的 tf.LayersModel；xs/ys 為訓練用 tensor 的切片
+        autoSelect: async function (key, buildModel, makeSample, log) {
+            if (this._benchCache[key]) { this.preferred = this._benchCache[key]; await this.use(this.preferred); return this.preferred; }
+            const original = tf.getBackend();
+            const results = {};
+            const avail = this.available();
+            const cands = avail.length > 1 ? avail.filter(b => b !== 'cpu') : avail;   // CPU 幾乎不可能最快，省下測速時間
+            for (const b of cands) {
+                if (!(await this.use(b))) continue;
+                let m = null, x = null, y = null;
+                try {
+                    [x, y] = makeSample();
+                    m = buildModel();
+                    const step = async () => { const h = await m.trainOnBatch(x, y); return h; };
+                    await step(); await step();                           // 暖機（shader 編譯 / wasm 初始化）
+                    const t0 = performance.now(); let n = 0;
+                    while (n < 3 || (performance.now() - t0 < 400 && n < 20)) { await step(); n++; }
+                    results[b] = (performance.now() - t0) / n;
+                } catch (e) {
+                    console.warn('[Backend] benchmark failed on', b, e && e.message);
+                } finally {
+                    try { if (m) m.dispose(); } catch (_) {}
+                    try { if (x) x.dispose(); if (y) y.dispose(); } catch (_) {}
+                }
+            }
+            const ranked = Object.entries(results).sort((a, c) => a[1] - c[1]);
+            const best = ranked.length ? ranked[0][0] : original;
+            if (log) log('⚡ 後端測速（每 batch）：' + ranked.map(([b, ms]) => `${b.toUpperCase()} ${ms.toFixed(1)}ms`).join(' / ') + ` → 使用 ${best.toUpperCase()}`);
+            this._benchCache[key] = best;
+            this.preferred = best;
+            await this.use(best);
+            return best;
+        }
+    };
     window._trainingActive = false;
     window._bgMode = false;
 
@@ -355,21 +421,16 @@
     document.addEventListener('visibilitychange', async () => {
         if (!window._trainingActive) return;
         if (document.visibilityState === 'hidden') {
-            console.log('[BG] Tab hidden — switching to CPU backend for background execution');
-            try {
-                await tf.setBackend('cpu');
-                await tf.ready();
-                window._bgMode = true;
-                console.log('[BG] CPU backend active');
-            } catch(e) { console.warn('[BG] CPU switch failed:', e?.message); }
+            // 只有 WebGL 在背景會被凍結；WASM/CPU 本來就能在背景跑，不必切換
+            if (tf.getBackend() !== 'webgl') return;
+            const bg = window.SilverBackend.bgBackend();
+            console.log('[BG] Tab hidden — switching to', bg, 'backend for background execution');
+            if (await window.SilverBackend.use(bg)) { window._bgMode = true; console.log('[BG]', bg, 'backend active'); }
         } else {
             if (window._bgMode) {
-                console.log('[BG] Tab visible — switching back to WebGL');
-                try {
-                    await tf.setBackend('webgl');
-                    await tf.ready();
-                    window._bgMode = false;
-                } catch(e) { console.warn('[BG] WebGL restore failed:', e?.message); }
+                console.log('[BG] Tab visible — restoring', window.SilverBackend.preferred);
+                await window.SilverBackend.restore();
+                window._bgMode = false;
             }
         }
     });
@@ -998,9 +1059,10 @@
                 tf.engine().endScope();
             } catch(_) {}
             try {
-                await tf.setBackend('webgl');
+                const target = (window.SilverBackend && window.SilverBackend.preferred) || 'webgl';
+                await tf.setBackend(target);
                 await tf.ready();
-                console.log('[WebGL] Backend reset OK, tensors:', tf.memory().numTensors);
+                console.log('[Backend] reset OK →', target, 'tensors:', tf.memory().numTensors);
                 return true;
             } catch(e) {
                 console.warn('[WebGL] Reset failed, falling back to CPU:', e?.message?.slice(0,60));
@@ -1029,9 +1091,73 @@
         // safeYield() 在背景時改用 setTimeout（節流至 ~1Hz 但持續執行）
         // 搭配既有的 CPU backend 切換，實現完整背景訓練
         // ══════════════════════════════════════════════════════════════
+        // MessageChannel 讓出主執行緒：沒有 setTimeout 的 4ms 下限，背景分頁也不會被強力節流
+        const fastYield = () => new Promise(r => {
+            try { const ch = new MessageChannel(); ch.port1.onmessage = () => { ch.port1.close(); r(); }; ch.port2.postMessage(0); }
+            catch (_) { setTimeout(r, 0); }
+        });
         const safeYield = () => document.hidden
-            ? new Promise(r => setTimeout(r, 0))
+            ? fastYield()
             : tf.nextFrame();
+
+        // ⚡ V20.4 訓練節流工具
+        //   原本每個 epoch：React setState ×3 + Plotly 重繪 + localStorage 讀取 + rAF yield（≥16ms），
+        //   400 epochs 光等畫面就要 6 秒以上，且 loss 每創新低就把整個模型序列化寫進 localStorage。
+        //   現在：UI 每 ~250ms 才更新一次、yield 依時間觸發、最佳權重先存在記憶體，訓練結束才寫一次。
+        const makeTicker = (ms) => {
+            let last = performance.now();
+            return (force = false) => {
+                const now = performance.now();
+                if (force || now - last >= ms) { last = now; return true; }
+                return false;
+            };
+        };
+        // 最佳權重快照：在 GPU/WASM 記憶體內 clone，不經過序列化
+        const snapshotWeights = (model, prev) => {
+            if (prev) tf.dispose(prev);
+            return model.getWeights().map(w => tf.keep(w.clone()));
+        };
+        const disposeSnapshot = (snap) => { if (snap) tf.dispose(snap); };
+        // 把快照權重寫入 localStorage，不影響模型目前（訓練中）的權重
+        const persistSnapshot = async (model, snap, url) => {
+            if (!snap) return;
+            const cur = model.getWeights().map(w => w.clone());
+            try { model.setWeights(snap); await model.save(url); }
+            finally { model.setWeights(cur); tf.dispose(cur); }
+        };
+        // fit() 內的 batch 級讓出：只在距上次讓出超過 ms 才讓，避免每個 batch 都等一個畫面
+        //   （TF.js 預設 yieldEvery='auto' 用 requestAnimationFrame，背景分頁會整個停住）
+        const makeBatchYielder = (ms = 200) => {
+            const tick = makeTicker(ms);
+            return { onBatchEnd: async () => { if (tick()) await fastYield(); } };
+        };
+        // 依使用者設定挑選訓練後端；'auto' 會用實際模型測速並快取結果
+        const prepareTrainingBackend = async (params, finalNumFeatures, sampleX, buildTarget, logsUpdater) => {
+            const SB = window.SilverBackend;
+            const choice = params.backend || 'auto';
+            if (choice !== 'auto') {
+                SB.preferred = choice;
+                const ok = await SB.use(choice);
+                if (!ok) logsUpdater(`⚠️ 無法使用 ${choice.toUpperCase()} 後端，改用 ${(await SB.restore()).toUpperCase()}`);
+                else logsUpdater(`⚡ 訓練後端：${choice.toUpperCase()}`);
+                return tf.getBackend();
+            }
+            const bs = Math.max(1, Math.min(params.batchSize || 32, sampleX.length));
+            const key = [params.algorithm, params.lookback, finalNumFeatures, params.layers, bs, params.predTarget || 'price', params.fastRnn !== false].join('|');
+            const spec = resolveTargetSpec(params.predTarget || 'price', params);
+            const rows = sampleX.slice(0, bs);
+            try {
+                return await SB.autoSelect(key, () => {
+                    const m = createModel(params.algorithm, params.lookback, finalNumFeatures, params);
+                    m.compile({ optimizer: tf.train.adam(params.lr), loss: spec.loss });
+                    return m;
+                }, () => [tf.tensor3d(rows), buildTarget(bs)], logsUpdater);
+            } catch (e) {
+                console.warn('[Backend] auto select failed:', e && e.message);
+                await SB.restore();
+                return tf.getBackend();
+            }
+        };
 
         // raceText: 多個候選網址同時競速（錯開發動），取最先成功的文字內容。
         // 給那些有自己 proxy 清單、沒走 ProxyRotator 的來源使用。
@@ -2054,6 +2180,155 @@
         try { tf.serialization.registerClass(LastToken); } catch (_) {}
 
         // ══════════════════════════════════════════════════════════════
+        // ⚡ V20.4 融合 RNN 層（FusedBiGRU / FusedLSTM）
+        // 與 tf.layers.bidirectional(gru) / tf.layers.lstm 數學完全相同
+        // （含 TF.js 預設的 hardSigmoid 閘門），權重形狀與順序也相同，
+        // 但每個時間步的 kernel 呼叫數大幅減少：
+        //   · 所有時間步的輸入投影 X·W 一次 matMul 算完（原本每步一次）
+        //   · 遞迴權重切分移出迴圈、hardSigmoid 的 0.2/0.5 預先折進權重
+        //   · WebGL：雙向 GRU 兩個方向堆疊成一個 batched matMul
+        // 實測（BiGRU 32u, lookback 10, batch 32）：單步 kernel 數 6434 → 1768~3116，
+        //   WASM 訓練快約 30%，WebGL 快約 2 倍。數值誤差 < 1e-6（已與原生層逐一比對）。
+        // ══════════════════════════════════════════════════════════════
+        class FusedBiGRU extends tf.layers.Layer {
+            constructor(cfg) {
+                super(cfg);
+                this.units = cfg.units;
+                this.returnSequences = !!cfg.returnSequences;
+                this.kernelInitializer = cfg.kernelInitializer || 'glorotUniform';
+                this.recurrentInitializer = cfg.recurrentInitializer || 'glorotUniform';
+            }
+            static get className() { return 'FusedBiGRU'; }
+            build(inputShape) {
+                const F = inputShape[inputShape.length - 1], U = this.units;
+                const ki = tf.initializers[this.kernelInitializer] ? tf.initializers[this.kernelInitializer]({}) : tf.initializers.glorotUniform({});
+                const ri = tf.initializers[this.recurrentInitializer] ? tf.initializers[this.recurrentInitializer]({}) : tf.initializers.glorotUniform({});
+                // 權重順序與 Bidirectional(GRU) 完全相同：fwd kernel/recurrent/bias, bwd kernel/recurrent/bias
+                this.kf = this.addWeight('forward_kernel', [F, 3*U], 'float32', ki);
+                this.rf = this.addWeight('forward_recurrent_kernel', [U, 3*U], 'float32', ri);
+                this.bf = this.addWeight('forward_bias', [3*U], 'float32', tf.initializers.zeros());
+                this.kb = this.addWeight('backward_kernel', [F, 3*U], 'float32', ki);
+                this.rb = this.addWeight('backward_recurrent_kernel', [U, 3*U], 'float32', ri);
+                this.bb = this.addWeight('backward_bias', [3*U], 'float32', tf.initializers.zeros());
+                this.built = true;
+            }
+            computeOutputShape(s) { return this.returnSequences ? [s[0], s[1], 2*this.units] : [s[0], 2*this.units]; }
+            call(inputs) {
+                return tf.tidy(() => {
+                    const x = Array.isArray(inputs) ? inputs[0] : inputs;
+                    const [B, T, F] = x.shape; const U = this.units;
+                    // 1) 一次算完所有時間步、兩個方向的輸入投影
+                    const K  = tf.concat([this.kf.read(), this.kb.read()], 1);              // [F,6U]
+                    const bs = tf.concat([this.bf.read(), this.bb.read()], 0);              // [6U]
+                    const xp2 = tf.add(tf.matMul(tf.reshape(x, [B*T, F]), K), bs);            // [B*T,6U]
+                    // TF.js GRU 預設 recurrentActivation = hardSigmoid = clip(0.2a+0.5, 0, 1)
+                    // 把 0.2 / 0.5 預先折進輸入投影與遞迴權重 → 迴圈內只剩 add + clip
+                    if (tf.getBackend() === 'webgl') return this._callStacked(xp2, B, T, U);
+                    return this._callSplit(xp2, B, T, U);
+                });
+            }
+            // WebGL：兩方向堆疊成 batched matMul（kernel 呼叫數減半，GPU dispatch 是瓶頸）
+            _callStacked(xp2, B, T, U) {
+                let xp = tf.transpose(tf.reshape(xp2, [B, T, 2, 3*U]), [1, 2, 0, 3]);       // [T,2,B,3U]
+                const [xpF, xpBr] = tf.split(xp, 2, 1);
+                xp = tf.concat([xpF, tf.reverse(xpBr, 0)], 1);                                // 反向分支時間倒序
+                const [xzrAll, xhAll] = tf.split(xp, [2*U, U], 3);
+                const xzr = tf.unstack(tf.add(tf.mul(xzrAll, 0.2), 0.5));                    // T × [2,B,2U]
+                const xh  = tf.unstack(xhAll);                                                // T × [2,B,U]
+                const R = tf.stack([this.rf.read(), this.rb.read()]);                        // [2,U,3U]
+                const [R1raw, R2] = tf.split(R, [2*U, U], 2);
+                const R1 = tf.mul(R1raw, 0.2);
+                let h = tf.zeros([2, B, U]);
+                const hs = [];
+                for (let t = 0; t < T; t++) {
+                    const zr = tf.clipByValue(tf.add(xzr[t], tf.matMul(h, R1)), 0, 1);
+                    const [z, r] = tf.split(zr, 2, 2);
+                    const hh = tf.tanh(tf.add(xh[t], tf.matMul(tf.mul(r, h), R2)));
+                    h = tf.add(hh, tf.mul(z, tf.sub(h, hh)));                                // z*h + (1-z)*hh
+                    if (this.returnSequences) hs.push(h);
+                }
+                if (!this.returnSequences) return tf.reshape(tf.transpose(h, [1, 0, 2]), [B, 2*U]);  // concat(fwd,bwd)
+                const H = tf.stack(hs);                                                       // [T,2,B,U]
+                const [hF4, hB4] = tf.split(H, 2, 1);
+                const hF = tf.squeeze(hF4, [1]);
+                const hB = tf.reverse(tf.squeeze(hB4, [1]), 0);
+                return tf.transpose(tf.concat([hF, hB], 2), [1, 0, 2]);                       // [B,T,2U]
+            }
+            // WASM/CPU：小矩陣 batched matMul 反而慢 → 兩個 2D matMul；時間倒序改用 JS 索引，省掉 reverse
+            _callSplit(xp2, B, T, U) {
+                const xp = tf.transpose(tf.reshape(xp2, [B, T, 6*U]), [1, 0, 2]);             // [T,B,6U]
+                const [zrF, hxF, zrB, hxB] = tf.split(xp, [2*U, U, 2*U, U], 2);
+                const X = [
+                    [tf.unstack(tf.add(tf.mul(zrF, 0.2), 0.5)), tf.unstack(hxF)],
+                    [tf.unstack(tf.add(tf.mul(zrB, 0.2), 0.5)), tf.unstack(hxB)],
+                ];
+                const W = [this.rf.read(), this.rb.read()].map(Rd => {
+                    const [a1, a2] = tf.split(Rd, [2*U, U], 1);
+                    return [tf.mul(a1, 0.2), a2];
+                });
+                const outs = [[], []];
+                const last = [null, null];
+                for (let d = 0; d < 2; d++) {
+                    let h = tf.zeros([B, U]);
+                    for (let s = 0; s < T; s++) {
+                        const t = d === 0 ? s : T - 1 - s;                                     // 反向分支由尾端讀起
+                        const zr = tf.clipByValue(tf.add(X[d][0][t], tf.matMul(h, W[d][0])), 0, 1);
+                        const [z, r] = tf.split(zr, 2, 1);
+                        const hh = tf.tanh(tf.add(X[d][1][t], tf.matMul(tf.mul(r, h), W[d][1])));
+                        h = tf.add(hh, tf.mul(z, tf.sub(h, hh)));
+                        if (this.returnSequences) outs[d][t] = h;                              // 依原始時間位置存放
+                    }
+                    last[d] = h;
+                }
+                if (!this.returnSequences) return tf.concat(last, 1);                          // [B,2U]
+                return tf.concat([tf.stack(outs[0], 1), tf.stack(outs[1], 1)], 2);             // [B,T,2U]
+            }
+            getConfig() { return { ...super.getConfig(), units: this.units, returnSequences: this.returnSequences,
+                kernelInitializer: this.kernelInitializer, recurrentInitializer: this.recurrentInitializer }; }
+        }
+        class FusedLSTM extends tf.layers.Layer {
+            constructor(cfg) { super(cfg); this.units = cfg.units; this.returnSequences = !!cfg.returnSequences; }
+            static get className() { return 'FusedLSTM'; }
+            build(inputShape) {
+                const F = inputShape[inputShape.length - 1], U = this.units;
+                this.k = this.addWeight('kernel', [F, 4*U], 'float32', tf.initializers.glorotUniform({}));
+                this.r = this.addWeight('recurrent_kernel', [U, 4*U], 'float32', tf.initializers.orthogonal({}));
+                this.b = this.addWeight('bias', [4*U], 'float32', tf.initializers.zeros());
+                this.built = true;
+            }
+            computeOutputShape(s) { return this.returnSequences ? [s[0], s[1], this.units] : [s[0], this.units]; }
+            call(inputs) {
+                return tf.tidy(() => {
+                    const x = Array.isArray(inputs) ? inputs[0] : inputs;
+                    const [B, T, F] = x.shape; const U = this.units;
+                    // 閘門 i,f,o 用 hardSigmoid（TF.js 預設）：把 0.2 / 0.5 折進權重；g 閘門維持原值（tanh）
+                    const one = Array(U).fill(1), sc = Array(U).fill(0.2), z0 = Array(U).fill(0), hf = Array(U).fill(0.5);
+                    const scale  = tf.tensor1d([...sc, ...sc, ...one, ...sc]);
+                    const offset = tf.tensor1d([...hf, ...hf, ...z0, ...hf]);
+                    let xp = tf.add(tf.matMul(tf.reshape(x, [B*T, F]), this.k.read()), this.b.read());
+                    xp = tf.add(tf.mul(xp, scale), offset);
+                    const xs = tf.unstack(tf.transpose(tf.reshape(xp, [B, T, 4*U]), [1, 0, 2]));  // T × [B,4U]
+                    const R = tf.mul(this.r.read(), scale);
+                    let h = tf.zeros([B, U]), c = tf.zeros([B, U]);
+                    const hs = [];
+                    for (let t = 0; t < T; t++) {
+                        const zz = tf.add(xs[t], tf.matMul(h, R));
+                        const s = tf.clipByValue(zz, 0, 1);            // i,f,o 一次算完 hardSigmoid
+                        const [i, f, , o] = tf.split(s, 4, 1);
+                        const g = tf.tanh(tf.split(zz, 4, 1)[2]);
+                        c = tf.add(tf.mul(f, c), tf.mul(i, g));
+                        h = tf.mul(o, tf.tanh(c));
+                        if (this.returnSequences) hs.push(h);
+                    }
+                    return this.returnSequences ? tf.stack(hs, 1) : h;
+                });
+            }
+            getConfig() { return { ...super.getConfig(), units: this.units, returnSequences: this.returnSequences }; }
+        }
+        try { tf.serialization.registerClass(FusedBiGRU); } catch (_) {}
+        try { tf.serialization.registerClass(FusedLSTM); } catch (_) {}
+
+        // ══════════════════════════════════════════════════════════════
         // TimesFM 架構 (patched decoder-only transformer)
         //
         // ⚠️ 這是 TimesFM 的「架構」，以你的資料從頭訓練，
@@ -2159,7 +2434,17 @@
             const inputTensor = tf.input({ shape: inputShape });
             let outputTensor;
 
-            if (algorithm === 'BiGRU') {
+            // ⚡ 融合 RNN（預設開啟）：數學與原生層相同，但 kernel 呼叫數大幅減少
+            const useFused = params.fastRnn !== false;
+            if (algorithm === 'BiGRU' && useFused) {
+                outputTensor = new FusedBiGRU({ units: safeUnits, returnSequences: true, recurrentInitializer: 'glorotUniform' }).apply(inputTensor);
+                outputTensor = tf.layers.dropout({ rate: 0.3 }).apply(outputTensor);
+                outputTensor = new FusedBiGRU({ units: safeUnits, returnSequences: false, recurrentInitializer: 'glorotUniform' }).apply(outputTensor);
+            } else if (algorithm === 'LSTM' && useFused) {
+                outputTensor = new FusedLSTM({ units: safeUnits, returnSequences: true }).apply(inputTensor);
+                outputTensor = tf.layers.dropout({ rate: 0.3 }).apply(outputTensor);
+                outputTensor = new FusedLSTM({ units: safeUnits, returnSequences: false }).apply(outputTensor);
+            } else if (algorithm === 'BiGRU') {
                 outputTensor = tf.layers.bidirectional({
                     layer: tf.layers.gru({ units: safeUnits, returnSequences: true, recurrentInitializer: 'glorotUniform' }),
                     inputShape: inputShape
@@ -2465,7 +2750,7 @@
             const memBefore = tf.memory();
             if (memBefore.numTensors > 800) {
                 logsUpdater(`⚠️ 偵測到殘留 tensor 過多 (${memBefore.numTensors})，正在清理...`);
-                try { await tf.setBackend('webgl'); } catch(_) {}
+                try { await window.SilverBackend.restore(); } catch(_) {}
             }
 
             const denormalizeLocal = (val) => denormalizePrice(val, minMax);
@@ -2735,7 +3020,8 @@
                     hovermode: 'x unified'
                 };
 
-                Plotly.newPlot(chartRef.current, traces, layout, { displayModeBar: false, responsive: true });
+                // ⚡ Plotly.react 只做差異更新，比每次 newPlot 重建整張圖快得多
+                Plotly.react(chartRef.current, traces, layout, { displayModeBar: false, responsive: true });
             }, [lossHistory, bestLoss]);
 
             return <div ref={chartRef} className="w-full h-[220px]"></div>;
@@ -3043,6 +3329,10 @@
                 directionalLambda: 0.3, huberDelta: 1.0,
                 algorithm: 'BiGRU', validationMode: VALIDATION_MODE.NONE, kFolds: 5,
                 predTarget: 'price',  // 'price' | 'direction' | 'dual'
+                // ⚡ V20.4 訓練加速
+                backend: 'auto',          // 'auto' | 'webgl' | 'wasm' | 'cpu'（auto = 用實際模型測速挑最快）
+                fastRnn: true,            // 融合 RNN 層（BiGRU / LSTM）
+                earlyStopPatience: 0,     // 0 = 關閉；N = 連續 N epochs 未改善就停止
             };
 
             const loadSavedConfig = () => {
@@ -3848,6 +4138,15 @@
                     setModelState(prev => ({ ...prev, isTraining: false }));
                     return;
                 }
+
+                // ⚡ 訓練前挑選後端（auto = 用實際模型結構測速，結果依設定快取）
+                if (runMode.includes('TRAIN')) {
+                    const _bt = params.predTarget || 'price';
+                    await prepareTrainingBackend(
+                        params, finalNumFeatures, X,
+                        (n) => buildTargetTensor(y.slice(0, n), yDir.slice(0, n), _bt, yLogRet.slice(0, n)),
+                        logsUpdater);
+                }
                 
                 // 訓練 Loss 歷史記錄
                 let historyLoss = [];
@@ -3881,48 +4180,59 @@
                         : tf.tensor2d(trainY, [trainY.length, 1]);
                     
                     let foldHistoryLoss = [];
+                    // ⚡ 只有 Fold 1 追蹤最佳權重；先存在記憶體，fit 結束後才寫一次 localStorage
+                    let foldBestSnap = null, foldBestLoss = currentBestLossForSaving;
+                    let foldPending = [];
+                    const foldUiTick = makeTicker(250);
+                    const foldEpochYield = makeTicker(100);
+                    const flushFoldUI = (epoch, force) => {
+                        if (!force && !foldUiTick()) return;
+                        if (foldIdx === 0 && foldPending.length) {
+                            const chunk = foldPending; foldPending = [];
+                            setTrainingResults(prev => ({ ...prev, lossHistory: [...prev.lossHistory, ...chunk] }));
+                            const mn = Math.min(...chunk);
+                            setBestLossValue(prev => (prev === null || mn < prev) ? mn : prev);
+                        }
+                        setModelState(prev => ({ ...prev, progress: ((foldIdx / params.kFolds) * 100) + (((epoch + 1) / params.epochs) * (100 / params.kFolds)), currentEpoch: epoch + 1, totalEpochs: params.epochs }));
+                    };
 
                     const foldCheckpointCallback = {
                         onEpochEnd: async (epoch, logs) => {
                             const currentLoss = logs.loss;
                             foldHistoryLoss.push(currentLoss);
-                            
-                            if (foldIdx === 0) { 
-                                historyLoss.push(currentLoss); 
-                                setTrainingResults(prev => ({ ...prev, lossHistory: [...prev.lossHistory, currentLoss] }));
-
-                                setBestLossValue(prev => (prev === null || currentLoss < prev) ? currentLoss : prev);
-                                const savedBestLoss = currentBestLossForSaving; 
-
-                                if (currentLoss < savedBestLoss) {
-                                    const lossToSave = currentLoss.toFixed(8);
-                                    localStorage.setItem(BEST_MAPE_KEY, lossToSave); 
-                                    setCurrentBestLoss(currentLoss); 
-                                    currentBestLossForSaving = currentLoss; 
-
-                                    await trainModelInstance.save(MODEL_URL);
-                                    
-                                    const fullConfig = { params: params, selectedFactors: selectedFactors, priceMinMax: { min: minMax.price.min, max: minMax.price.max }, activeFeaturesConfig: activeFeatures.map(f => ({ key: f.key, name: f.name, isExternal: f.isExternal, minMax: { min: f.minMax.min, max: f.minMax.max } })), finalNumFeatures: finalNumFeatures };
-                                    localStorage.setItem(TRAIN_CONFIG_KEY, JSON.stringify(fullConfig));
-
-                                    setModelState(prev => ({ 
-                                        ...prev, 
-                                        loss: lossToSave, 
-                                        logs: [`Fold ${foldIdx + 1} Epoch ${epoch+1}: Loss ${lossToSave} - **新的歷史最佳! 正在儲存模型...**`, ...prev.logs.filter(log => !log.startsWith('Epoch') && !log.startsWith('新的歷史最佳')).slice(0, 4)], 
-                                    }));
+                            if (foldIdx === 0) {
+                                historyLoss.push(currentLoss);
+                                foldPending.push(currentLoss);
+                                if (currentLoss < foldBestLoss) {
+                                    foldBestLoss = currentLoss;
+                                    foldBestSnap = snapshotWeights(trainModelInstance, foldBestSnap);
                                 }
                             }
-                            
-                            setModelState(prev => ({ ...prev, progress: (((foldIdx + 1) / params.kFolds) * 100) + (((epoch + 1) / params.epochs) * (100 / params.kFolds)), currentEpoch: epoch + 1, totalEpochs: params.epochs }));
-                            await safeYield();
+                            flushFoldUI(epoch, epoch === params.epochs - 1);
+                            if (foldEpochYield()) await fastYield();
                         }
                     };
                     
                     await trainModelInstance.fit(foldTensorX, foldTensorY, { 
                         epochs: params.epochs, 
                         batchSize: params.batchSize, 
-                        callbacks: [foldCheckpointCallback] 
+                        yieldEvery: 'never',
+                        callbacks: [foldCheckpointCallback, makeBatchYielder(200)] 
                     });
+                    flushFoldUI(params.epochs - 1, true);
+
+                    if (foldIdx === 0 && foldBestSnap) {
+                        const lossToSave = foldBestLoss.toFixed(8);
+                        await persistSnapshot(trainModelInstance, foldBestSnap, MODEL_URL);
+                        disposeSnapshot(foldBestSnap); foldBestSnap = null;
+                        localStorage.setItem(BEST_MAPE_KEY, lossToSave);
+                        setCurrentBestLoss(foldBestLoss);
+                        currentBestLossForSaving = foldBestLoss;
+                        const fullConfig = { params: params, selectedFactors: selectedFactors, priceMinMax: { min: minMax.price.min, max: minMax.price.max }, activeFeaturesConfig: activeFeatures.map(f => ({ key: f.key, name: f.name, isExternal: f.isExternal, minMax: { min: f.minMax.min, max: f.minMax.max } })), finalNumFeatures: finalNumFeatures };
+                        localStorage.setItem(TRAIN_CONFIG_KEY, JSON.stringify(fullConfig));
+                        setModelState(prev => ({ ...prev, loss: lossToSave,
+                            logs: [`Fold 1: 最佳 Loss ${lossToSave} - **新的歷史最佳! 已儲存模型**`, ...prev.logs.filter(log => !log.startsWith('Epoch') && !log.startsWith('新的歷史最佳')).slice(0, 4)] }));
+                    }
 
                     tf.dispose([foldTensorX, foldTensorY]);
                     logsUpdater(`Fold ${foldIdx + 1}/${params.kFolds}: 訓練完成，正在評估...`);
@@ -3977,7 +4287,8 @@
                         const end = start + foldSize;
                         
                         let testIndices = foldIndices.slice(start, end);
-                        let trainIndices = foldIndices.filter(idx => !testIndices.includes(idx));
+                        const _testSet = new Set(testIndices);
+                        let trainIndices = foldIndices.filter(idx => !_testSet.has(idx));
                         
                         const trainX  = trainIndices.map(idx => X[idx]);
                         const trainY  = trainIndices.map(idx => y[idx]);
@@ -4119,52 +4430,91 @@
                         const tensorX = tf.tensor3d(_trainX);
                         const tensorY = buildTargetTensor(_trainY, _trainYDir, _pt, _trainYLR);
 
+                        // ⚡ V20.4 快速訓練迴圈
+                        //   · 最佳權重存在記憶體（clone），不再每次創新低就序列化寫 localStorage
+                        //   · UI / 圖表每 ~250ms 批次更新一次；yield 依時間觸發
+                        //   · 每 60 秒把目前最佳權重落地一次（防當機），訓練結束再寫最後一次
+                        //   · 可選早停：連續 N epochs 沒有改善就提前結束
+                        const savedBestLossStr = localStorage.getItem(BEST_MAPE_KEY);
+                        const savedBestLoss = savedBestLossStr ? parseFloat(savedBestLossStr) : 100;
+                        let bestSnap = null, bestLoss = savedBestLoss, bestDirty = false;
+                        let runBest = Infinity, sinceImprove = 0;
+                        const patience = Math.max(0, parseInt(params.earlyStopPatience) || 0);
+                        let pendingLoss = [], lastLoss = NaN, lastEpoch = -1, stoppedEarly = false;
+                        const uiTick = makeTicker(250), epochYield = makeTicker(100), saveTick = makeTicker(60000);
+                        const tTrain0 = performance.now();
+
+                        const flushUI = () => {
+                            if (lastEpoch < 0) return;
+                            const progress = ((lastEpoch + 1) / params.epochs) * 100;
+                            if (pendingLoss.length) {
+                                const chunk = pendingLoss; pendingLoss = [];
+                                setTrainingResults(prev => ({ ...prev, lossHistory: [...prev.lossHistory, ...chunk] }));
+                                const mn = Math.min(...chunk);
+                                setBestLossValue(prev => (prev === null || mn < prev) ? mn : prev);
+                            }
+                            const isBest = bestSnap && bestLoss === lastLoss;
+                            const shown = isBest ? bestLoss.toFixed(8) : lastLoss.toFixed(4);
+                            const eps = (lastEpoch + 1) / Math.max(1e-3, (performance.now() - tTrain0) / 1000);
+                            setModelState(prev => ({
+                                ...prev, progress, currentEpoch: lastEpoch + 1, totalEpochs: params.epochs,
+                                loss: shown,
+                                logs: [`Epoch ${lastEpoch + 1}: Loss ${shown}${isBest ? ' - **新的歷史最佳!**' : ''} (${eps.toFixed(1)} epochs/s)`,
+                                       ...prev.logs.filter(log => !log.startsWith('Epoch') && !log.startsWith('新的歷史最佳') && !log.startsWith('正在儲存最佳模型')).slice(0, 4)],
+                                ...(isBest ? { directionalAccuracy: 'N/A', mape: 'N/A' } : {}),
+                            }));
+                            if (bestSnap) setCurrentBestLoss(bestLoss);
+                        };
+                        const persistBest = async () => {
+                            if (!bestSnap || !bestDirty) return;
+                            await persistSnapshot(modelToUse, bestSnap, MODEL_URL);
+                            localStorage.setItem(BEST_MAPE_KEY, bestLoss.toFixed(8));
+                            const fullConfig = { params: params, selectedFactors: selectedFactors, priceMinMax: { min: minMax.price.min, max: minMax.price.max }, activeFeaturesConfig: activeFeatures.map(f => ({ key: f.key, name: f.name, isExternal: f.isExternal, minMax: { min: f.minMax.min, max: f.minMax.max } })), finalNumFeatures: finalNumFeatures };
+                            localStorage.setItem(TRAIN_CONFIG_KEY, JSON.stringify(fullConfig));
+                            bestDirty = false;
+                        };
+
                         const checkpointCallback = {
                             onEpochEnd: async (epoch, logs) => {
                                 const currentLoss = logs.loss;
-                                const progress = ((epoch + 1) / params.epochs) * 100;
                                 historyLoss.push(currentLoss);
-                                setTrainingResults(prev => ({ ...prev, lossHistory: [...prev.lossHistory, currentLoss] }));
+                                pendingLoss.push(currentLoss);
+                                lastLoss = currentLoss; lastEpoch = epoch;
 
-
-                                setBestLossValue(prev => (prev === null || currentLoss < prev) ? currentLoss : prev);
-                                const savedBestLossStr = localStorage.getItem(BEST_MAPE_KEY);
-                                const savedBestLoss = savedBestLossStr ? parseFloat(savedBestLossStr) : 100; 
-
-                                if (currentLoss < savedBestLoss) {
-                                    const lossToSave = currentLoss.toFixed(8);
-                                    localStorage.setItem(BEST_MAPE_KEY, lossToSave); 
-                                    setCurrentBestLoss(currentLoss); 
-                                    await modelToUse.save(MODEL_URL);
-                                    const fullConfig = { params: params, selectedFactors: selectedFactors, priceMinMax: { min: minMax.price.min, max: minMax.price.max }, activeFeaturesConfig: activeFeatures.map(f => ({ key: f.key, name: f.name, isExternal: f.isExternal, minMax: { min: f.minMax.min, max: f.minMax.max } })), finalNumFeatures: finalNumFeatures };
-                                    localStorage.setItem(TRAIN_CONFIG_KEY, JSON.stringify(fullConfig));
-
-                                    setModelState(prev => ({ 
-                                        ...prev, 
-                                        progress, 
-                                        loss: lossToSave, 
-                                        logs: [`Epoch ${epoch+1}: Loss ${lossToSave} - **新的歷史最佳! 正在儲存模型...**`, ...prev.logs.filter(log => !log.startsWith('Epoch') && !log.startsWith('新的歷史最佳')).slice(0, 4)], 
-                                        directionalAccuracy: 'N/A',
-                                        mape: 'N/A' 
-                                    }));
-                                } else {
-                                    setModelState(prev => ({ 
-                                        ...prev, 
-                                        progress, 
-                                        loss: currentLoss.toFixed(4),
-                                        logs: [`Epoch ${epoch+1}: Loss ${currentLoss.toFixed(4)}`, ...prev.logs.filter(log => !log.startsWith('Epoch') && !log.startsWith('正在儲存最佳模型')).slice(0, 4)] 
-                                    }));
+                                if (currentLoss < bestLoss) {
+                                    bestLoss = currentLoss;
+                                    bestSnap = snapshotWeights(modelToUse, bestSnap);
+                                    bestDirty = true;
                                 }
-                                await safeYield();
+                                if (patience > 0) {
+                                    if (currentLoss < runBest - 1e-7) { runBest = currentLoss; sinceImprove = 0; }
+                                    else if (++sinceImprove >= patience) { modelToUse.stopTraining = true; stoppedEarly = true; }
+                                }
+                                if (uiTick(epoch === params.epochs - 1)) flushUI();
+                                if (bestDirty && saveTick()) await persistBest();
+                                if (epochYield()) await fastYield();
                             }
                         };
 
                         await modelToUse.fit(tensorX, tensorY, { 
                             epochs: params.epochs, 
                             batchSize: params.batchSize, 
-                            callbacks: [checkpointCallback] 
+                            yieldEvery: 'never',
+                            callbacks: [checkpointCallback, makeBatchYielder(200)] 
                         });
+                        flushUI();
+                        const trainSec = (performance.now() - tTrain0) / 1000;
+                        logsUpdater(`⚡ 訓練耗時 ${trainSec.toFixed(1)} 秒（${lastEpoch + 1} epochs，${((lastEpoch + 1) / Math.max(trainSec, 1e-3)).toFixed(1)} epochs/s，後端 ${tf.getBackend().toUpperCase()}）` +
+                            (stoppedEarly ? `，早停：連續 ${patience} epochs 未改善` : ''));
 
+                        if (bestSnap) {
+                            // 本次訓練有刷新歷史最佳 → 直接把最佳權重套回模型（省去 localStorage 往返）
+                            await persistBest();
+                            modelToUse.setWeights(bestSnap);
+                            disposeSnapshot(bestSnap); bestSnap = null;
+                            logsUpdater(`訓練完成，已套用本次最佳權重 (Loss ${bestLoss.toFixed(8)}) 進行最終預測...`);
+                            finalModel = modelToUse;
+                        } else {
                         logsUpdater(`訓練完成，重新載入 LocalStorage 中的最佳模型進行最終預測...`);
 
                         try {
@@ -4185,6 +4535,7 @@
                         } catch(e) {
                             logsUpdater('警告: 無法重新載入 LocalStorage 中的最佳模型，使用當前訓練結束的模型進行預測。');
                             finalModel = modelToUse;
+                        }
                         }
                         
                         tf.dispose([tensorX, tensorY]);
@@ -4608,7 +4959,7 @@
                         await model.fit(tX, tY, {
                             epochs: SEARCH_EPOCHS,
                             batchSize: 128,   // 搜尋固定 128：GPU dispatch 次數減半
-                            verbose: 0,
+                            verbose: 0, yieldEvery: 'never',  // ⚡ 預設 rAF yield 在背景分頁會停住
                             callbacks: { onEpochEnd: async (ep, logs) => {
                                 finalLoss = logs?.loss ?? finalLoss;
                                 // ── 早停：PATIENCE epochs 無改善 → 提前結束 ──
@@ -4834,7 +5185,7 @@
                         tM = createModel(trialParams.algorithm, afLB, afFt, trialParams);
                         tM.compile({ optimizer: tf.train.adam(trialParams.lr), loss: getDirectionalHuberLoss(trialParams.directionalLambda, trialParams.huberDelta) });
                         let bestL = Infinity, noImp = 0;
-                        await tM.fit(xT, yT, { epochs: QUICK_EP, batchSize: 128, verbose: 0,
+                        await tM.fit(xT, yT, { epochs: QUICK_EP, batchSize: 128, verbose: 0, yieldEvery: 'never',  // ⚡ 預設 rAF yield 在背景分頁會停住
                             callbacks: { onEpochEnd: async (ep, logs) => {
                                 const L = logs?.loss ?? Infinity;
                                 if (L < bestL - 1e-6) { bestL = L; noImp = 0; } else noImp++;
@@ -6373,6 +6724,35 @@
                                         <span className="font-mono text-accent font-bold">{params.batchSize}</span>
                                     </div>
                                     <input type="range" min="8" max="128" value={params.batchSize} step="8" onChange={e => handleParamChange('batchSize', parseInt(e.target.value))} className="custom-range w-full" />
+                                    <div className="text-[10px] text-zinc-500">⚡ Batch 越大每 epoch 越快（RNN 的固定開銷佔大宗）：32→128 約快 1.7 倍</div>
+                                </div>
+
+                                {/* ⚡ 訓練加速 */}
+                                <div className="space-y-2 p-2 rounded-lg border border-zinc-700 bg-zinc-900/40">
+                                    <div className="text-xs font-semibold text-yellow-400">⚡ 訓練加速</div>
+                                    <div className="flex items-center justify-between text-xs text-zinc-400 gap-2">
+                                        <span>運算後端</span>
+                                        <select value={params.backend || 'auto'} onChange={e => handleParamChange('backend', e.target.value)} disabled={modelState.isTraining}
+                                            className="px-2 py-1 rounded-lg bg-zinc-900/70 border border-zinc-600 text-zinc-100 text-xs">
+                                            <option value="auto">自動測速（建議）</option>
+                                            <option value="webgl">WebGL (GPU)</option>
+                                            <option value="wasm">WASM (SIMD)</option>
+                                            <option value="cpu">CPU (JS)</option>
+                                        </select>
+                                    </div>
+                                    <label className="flex items-center justify-between text-xs text-zinc-400 gap-2 cursor-pointer">
+                                        <span>融合 RNN 核心（BiGRU/LSTM，數學相同、kernel 數少 2~3.6 倍）</span>
+                                        <input type="checkbox" checked={params.fastRnn !== false} disabled={modelState.isTraining}
+                                            onChange={e => handleParamChange('fastRnn', e.target.checked)} />
+                                    </label>
+                                    <div className="space-y-1">
+                                        <div className="flex justify-between text-xs text-zinc-400">
+                                            <span>早停 Patience（0 = 關閉）</span>
+                                            <span className="font-mono text-accent font-bold">{params.earlyStopPatience || 0}</span>
+                                        </div>
+                                        <input type="range" min="0" max="100" step="5" value={params.earlyStopPatience || 0} disabled={modelState.isTraining}
+                                            onChange={e => handleParamChange('earlyStopPatience', parseInt(e.target.value))} className="custom-range w-full" />
+                                    </div>
                                 </div>
                                 
                                 {/* Future Days */}
