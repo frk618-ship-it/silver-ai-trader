@@ -394,6 +394,7 @@
                 } catch (e) {
                     console.warn('[Backend] benchmark failed on', b, e && e.message);
                 } finally {
+                    try { if (m && m.optimizer) m.optimizer.dispose(); } catch (_) {}
                     try { if (m) m.dispose(); } catch (_) {}
                     try { if (x) x.dispose(); if (y) y.dispose(); } catch (_) {}
                 }
@@ -4513,6 +4514,8 @@
                             modelToUse.setWeights(bestSnap);
                             disposeSnapshot(bestSnap); bestSnap = null;
                             logsUpdater(`訓練完成，已套用本次最佳權重 (Loss ${bestLoss.toFixed(8)}) 進行最終預測...`);
+                            // 釋放 Adam 的動量狀態（訓練已結束，預測不需要）
+                            try { if (modelToUse.optimizer) modelToUse.optimizer.dispose(); } catch (_) {}
                             finalModel = modelToUse;
                         } else {
                         logsUpdater(`訓練完成，重新載入 LocalStorage 中的最佳模型進行最終預測...`);
