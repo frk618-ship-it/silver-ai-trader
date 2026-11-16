@@ -1,0 +1,8 @@
+# Silver AI Trader — Python 版
+streamlit>=1.45
+torch>=2.3
+pandas>=2.2
+numpy>=1.26
+plotly>=5.22
+yfinance>=0.2.54
+requests>=2.31
