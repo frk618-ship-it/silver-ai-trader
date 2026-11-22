@@ -15,7 +15,6 @@
 | --- | --- |
 | `python/` | 主程式（Streamlit App、模型、資料來源、測試） |
 | `index.html` | GitHub Pages 首頁：導向 Streamlit App |
-| `original-v20_3.html` | 最初的 V20.3 單檔 HTML 版本（保留作為參考） |
 | `.streamlit/` | Streamlit Cloud 的主題設定 |
 | `.devcontainer/` | GitHub Codespaces／Dev Container 開發環境 |
 
