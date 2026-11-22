@@ -30,10 +30,6 @@
   .go:hover { background: var(--accent-2); }
   .count { text-align: center; color: var(--text-3); font-size: 13px; margin-top: 12px; min-height: 20px; }
   .count button { background: none; border: 0; color: var(--accent); cursor: pointer; font: inherit; padding: 0; text-decoration: underline; }
-  .other { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--border); font-size: 13px; color: var(--text-3); }
-  .other a { color: var(--text-2); }
-  .other ul { margin: 8px 0 0; padding-left: 18px; }
-  .note { color: var(--warn); }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 </head>
@@ -44,13 +40,6 @@
   <p>新版在伺服器上抓取行情，即時報價、歷史價格與 24 項輔助因子都能取得，也不需要在自己的電腦上訓練。</p>
   <a class="go" id="go" href="https://silver-ai.streamlit.app/">開啟白銀期貨 AI 預測 →</a>
   <div class="count" id="count" aria-live="polite"></div>
-  <div class="other">舊版（瀏覽器內訓練）
-    <ul>
-      <li><a href="v2/">v2 網頁版</a></li>
-      <li><a href="v1/">V20.4 版</a></li>
-    </ul>
-    <span class="note">⚠️ 這兩版目前抓不到資料：Yahoo 不允許網頁直接讀取，免費的公開中繼也已失效。</span>
-  </div>
 </main>
 <script>
   // 5 秒後自動前往新網址；可按「留在此頁」取消
