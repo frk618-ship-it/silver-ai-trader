@@ -2,11 +2,14 @@
 
 白銀期貨多因子深度學習預測系統。
 
+> ✨ **v2 網頁版（重新設計 UI／UX）** → https://frk618-ship-it.github.io/silver-ai-trader/v2/ ，說明見 [`v2/`](v2/README.md)。
+>
 > 🐍 **新版：Python（Streamlit + PyTorch）** → 見 [`python/`](python/README.md)，介面重新設計，執行 `streamlit run python/app.py`。
 > 以下為 HTML 版說明，HTML 版仍保留在 GitHub Pages 上。
 
 | 檔案 | 說明 |
 | --- | --- |
+| `v2/` | **v2 網頁版**：重新設計的介面，模型與因子選項同 v20.3 |
 | `python/` | **V21 Python 版**：Streamlit 介面 + PyTorch 模型 |
 | `index.html` | **V20.4 Fast-Train**：訓練速度優化版（直接用瀏覽器開啟即可） |
 | `original-v20_3.html` | 原始 V20.3 instant-start 版本（對照用，未修改） |
