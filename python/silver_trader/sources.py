@@ -28,11 +28,12 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 # ══════════════════════════════════════════════════════════════
 # 網路入口（測試時 monkeypatch 這幾個函式）
 # ══════════════════════════════════════════════════════════════
-def http_get(url: str, timeout: float = 12.0, headers: dict | None = None) -> requests.Response:
-    h = {"User-Agent": UA, "Accept": "*/*"}
+def http_get(url: str, timeout: float = 12.0, headers: dict | None = None,
+             session: requests.Session | None = None) -> requests.Response:
+    h = {"User-Agent": UA, "Accept": "*/*", "Accept-Language": "en-US,en;q=0.9"}
     if headers:
         h.update(headers)
-    r = requests.get(url, timeout=timeout, headers=h)
+    r = (session or requests).get(url, timeout=timeout, headers=h)
     r.raise_for_status()
     return r
 
@@ -219,9 +220,10 @@ class AuxResult:
 def fetch_cot() -> AuxResult:
     """CFTC COT（Disaggregated 管理基金淨部位 → Legacy 非商業淨部位）。"""
     sources = [
-        ("CFTC Disaggregated", "https://publicreporting.cftc.gov/resource/72hh-3qpy.json",
-         "as_of_date_form_yyyy_mm_dd", "m_money_positions_long_all", "m_money_positions_short_all"),
-        ("CFTC Legacy", "https://publicreporting.cftc.gov/resource/6dca-aqww.json",
+        # 2026 年起 Disaggregated 資料集已沒有 as_of_date_form_yyyy_mm_dd 欄位，日期改用 report_date_as_yyyy_mm_dd
+        ("CFTC Disaggregated（管理基金）", "https://publicreporting.cftc.gov/resource/72hh-3qpy.json",
+         "report_date_as_yyyy_mm_dd", "m_money_positions_long_all", "m_money_positions_short_all"),
+        ("CFTC Legacy（非商業）", "https://publicreporting.cftc.gov/resource/6dca-aqww.json",
          "report_date_as_yyyy_mm_dd", "noncomm_positions_long_all", "noncomm_positions_short_all"),
     ]
     wheres = [
@@ -257,7 +259,8 @@ def fetch_tips(years: list[int]) -> AuxResult:
             xml = http_get(f"{base}?data=daily_treasury_real_yield_curve&field_tdr_date_value={y}", timeout=15).text
             for blk in re.findall(r"<m:properties>[\s\S]*?</m:properties>", xml):
                 dm = re.search(r"<d:NEW_DATE[^>]*>(\d{4}-\d{2}-\d{2})", blk)
-                vm = re.search(r"<d:BC_5YEAR[^>]*>([\d.\-]+)</d:BC_5YEAR>", blk)
+                # 美國財政部已把欄位由 BC_5YEAR 改名為 TC_5YEAR，兩種都接受
+                vm = re.search(r"<d:(?:TC|BC)_5YEAR[^>]*>([\d.\-]+)</d:(?:TC|BC)_5YEAR>", blk)
                 if dm and vm:
                     recs[pd.Timestamp(dm.group(1))] = float(vm.group(1))
         except Exception as e:  # noqa: BLE001
@@ -265,7 +268,7 @@ def fetch_tips(years: list[int]) -> AuxResult:
     if recs:
         s = pd.Series(recs).sort_index()
         return AuxResult(s, "US Treasury", True, f"{len(s)} 筆")
-    return AuxResult(None, "無", False, "；".join(errors[-2:]))
+    return AuxResult(None, "無", False, "；".join(errors[-2:]) or "回應中找不到 5 年期 TIPS 欄位")
 
 
 def fetch_fear_greed() -> AuxResult:
@@ -305,15 +308,20 @@ def fetch_stocktwits() -> AuxResult:
 
 
 def fetch_google_trends(start: pd.Timestamp) -> AuxResult:
-    t = f"{start:%Y-%m} {datetime.now():%Y-%m}"
+    """Google Trends「silver」美國週度熱度。需要先拿到 Google 的 cookie，時間範圍用 "today 5-y"。"""
     try:
+        sess = requests.Session()
+        try:
+            http_get("https://trends.google.com/trends/?geo=US", timeout=12, session=sess)
+        except Exception:  # noqa: BLE001
+            pass
         q = urlencode({"hl": "en-US", "tz": "-480", "req": json.dumps(
-            {"comparisonItem": [{"keyword": "silver", "geo": "US", "time": t}], "category": 0, "property": ""})})
-        txt = http_get(f"https://trends.google.com/trends/api/explore?{q}", timeout=12).text
+            {"comparisonItem": [{"keyword": "silver", "geo": "US", "time": "today 5-y"}], "category": 0, "property": ""})})
+        txt = http_get(f"https://trends.google.com/trends/api/explore?{q}", timeout=12, session=sess).text
         widgets = json.loads(txt[txt.index("{"):]).get("widgets", [])
         w = next(w for w in widgets if w.get("id") == "TIMESERIES")
         q2 = urlencode({"hl": "en-US", "tz": "-480", "token": w["token"], "req": json.dumps(w["request"])})
-        txt2 = http_get(f"https://trends.google.com/trends/api/widgetdata/multiline?{q2}", timeout=12).text
+        txt2 = http_get(f"https://trends.google.com/trends/api/widgetdata/multiline?{q2}", timeout=12, session=sess).text
         tl = json.loads(txt2[txt2.index("{"):])["default"]["timelineData"]
         s = pd.Series({pd.Timestamp(int(p["time"]), unit="s").normalize(): float((p.get("value") or [50])[0]) for p in tl}).sort_index()
         if s.empty:

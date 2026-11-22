@@ -86,7 +86,9 @@ PRED_TARGETS = {
 @dataclass
 class TrainParams:
     algorithm: str = "BiGRU"
-    pred_target: str = "price"
+    # 預設用對數報酬率：實測真實資料時，直接預測「價格水準」的誤差（3–7%）和單日漲跌差不多大，
+    # 推算出的明日漲跌幅會失真（例如 +16%）；預測報酬率的幅度合理，價格誤差也較小。
+    pred_target: str = "logreturn"
     lookback: int = 10
     layers: int = 32
     epochs: int = 400

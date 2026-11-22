@@ -4,9 +4,33 @@
 
 ![總覽](docs/overview.png)
 
-> 截圖使用測試用的假資料；實際執行會抓真實行情。
+> 總覽截圖為 2026-11-22 以真實行情實際執行的結果（BiGRU、對數報酬率、200 epochs）；其他截圖使用測試用的假資料。
 
-## 安裝與執行
+## 🌐 部署成網站（Streamlit Community Cloud，免費）
+
+Python 版在伺服器上抓資料，**沒有瀏覽器 CORS 的限制**，不需要任何 proxy 或中繼。2026-11 實測 14 個資料來源全部取得真實資料，完整載入約 5 秒。
+
+1. 到 https://share.streamlit.io 用 GitHub 帳號登入，授權讀取 `frk618-ship-it/silver-ai-trader`。
+2. 按 **Create app** → **Deploy a public app from GitHub**（或「Yup, I have an app」）。
+3. 填入：
+
+   | 欄位 | 值 |
+   | --- | --- |
+   | Repository | `frk618-ship-it/silver-ai-trader` |
+   | Branch | `main` |
+   | Main file path | `python/app.py` |
+   | App URL | 自訂，例如 `silver-ai` → `https://silver-ai.streamlit.app` |
+
+4. 展開 **Advanced settings**，Python version 選 **3.12** → **Deploy**。第一次安裝套件約 3–5 分鐘。
+5. （建議）部署後在 App 的 **Settings → Sharing** 設成只有指定 email 可以看。所有訪客會共用同一份模型與預測紀錄。
+
+雲端版的注意事項：
+
+- **模型與紀錄不會永久保存**：App 閒置一段時間會休眠，或重新部署時，伺服器上的模型、冠軍、預測日誌都會清空，需要重新訓練。之後推到 `main` 的程式更新會自動重新部署。
+- **速度**：免費主機 CPU 較少。標準 400 epochs 約 20 秒（LSTM／Transformer／TimesFM）到 70 秒（BiGRU）。
+- **相依套件**：`requirements.txt` 指定只裝 CPU 版 PyTorch，避免下載用不到的 GPU 函式庫。
+
+## 安裝與執行（本機）
 
 需要 Python 3.10 以上。
 
@@ -48,6 +72,8 @@ streamlit run app.py
 
 **保留**：25 個因子與計算方式、四種模型結構（BiGRU、LSTM、Transformer、TimesFM 風格）、四種預測目標（價格、方向、雙頭、對數報酬率）、方向懲罰 Huber loss、時序保留集與冠軍／挑戰者晉升規則、預測日誌對帳、回測規則。
 
+**預設預測目標改為「對數報酬率」**：用真實資料實測，直接預測價格水準時誤差 3–7%，和單日漲跌一樣大，推算出的明日漲跌會失真（例如 +16%、−37%）。改預測報酬率後幅度合理（±0.5–1.2%），價格誤差也較小。若預測的漲跌超過近期每日波動的 3 倍，總覽會顯示警告。
+
 **修正**（HTML 版的方法上的問題）：
 
 1. **方向懲罰 loss**：HTML 版拿「同一個 batch 相鄰樣本」當前一天，但訓練時 batch 是打亂的，相鄰樣本其實不是前一天；現在改用每個樣本真正的前一日價格。
@@ -57,6 +83,7 @@ streamlit run app.py
 **其他**：
 
 - 不再需要 CORS proxy（Python 直接連資料來源，較快也較穩）；資料來源改以 yfinance 為主。
+- 資料來源格式更新（2026-11 實測發現）：CFTC Disaggregated 的日期欄位改名、美國財政部 TIPS 欄位由 `BC_5YEAR` 改為 `TC_5YEAR`、Google Trends 需要先取得 cookie 且時間範圍要用 `today 5-y`。修正後 14 個來源全部是真實資料。
 - 輔助因子失敗時以固定中性值補位，不再用隨機數（結果可重現）；可勾選固定亂數種子。
 - PyTorch 的 GRU/LSTM 用標準 sigmoid 閘門（TF.js 預設是 hardSigmoid），因此與 HTML 版的模型檔**不互通**。
 - 移除 WebGL 時代的「單元數上限 64」限制。

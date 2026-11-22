@@ -45,18 +45,18 @@ def install(monkeypatch=None, *, quote_ok=True, quote_age_h=0.2, history_ok=True
         t = pd.Timestamp(datetime.now(timezone.utc) - timedelta(hours=quote_age_h))
         return pd.DataFrame({"Close": [qp]}, index=pd.DatetimeIndex([t]))
 
-    def http_get(url, timeout=12.0, headers=None):
+    def http_get(url, timeout=12.0, headers=None, session=None):
         if not aux_ok or "stooq" in url or "finance.yahoo" in url:
             raise RuntimeError("network blocked")
         if "publicreporting.cftc.gov" in url:
             d = pd.date_range(end=pd.Timestamp.now(), periods=150, freq="W-TUE")
-            return FakeResp(json.dumps([{"as_of_date_form_yyyy_mm_dd": x.strftime("%Y-%m-%dT00:00:00"),
+            return FakeResp(json.dumps([{"report_date_as_yyyy_mm_dd": x.strftime("%Y-%m-%dT00:00:00"),
                                          "m_money_positions_long_all": str(40000 + i * 50),
                                          "m_money_positions_short_all": "20000"} for i, x in enumerate(d)]))
         if "treasury.gov" in url:
             y = url.split("=")[-1]
             blocks = "".join(f"<m:properties><d:NEW_DATE m:type=\"Edm.DateTime\">{y}-{m:02d}-15T00:00:00</d:NEW_DATE>"
-                             f"<d:BC_5YEAR m:type=\"Edm.Double\">{1.5 + m / 20:.2f}</d:BC_5YEAR></m:properties>"
+                             f"<d:TC_5YEAR m:type=\"Edm.Double\">{1.5 + m / 20:.2f}</d:TC_5YEAR></m:properties>"
                              for m in range(1, 13))
             return FakeResp(blocks)
         if "dataviz.cnn.io" in url:
@@ -66,6 +66,8 @@ def install(monkeypatch=None, *, quote_ok=True, quote_age_h=0.2, history_ok=True
         if "stocktwits" in url:
             return FakeResp(json.dumps({"messages": [{"entities": {"sentiment": {"basic": "Bullish" if i % 3 else "Bearish"}}} for i in range(30)]}))
         if "trends.google.com" in url:
+            if "/trends/?" in url:
+                return FakeResp("")
             if "explore" in url:
                 return FakeResp(")]}'\n" + json.dumps({"widgets": [{"id": "TIMESERIES", "token": "t", "request": {}}]}))
             d = pd.date_range(end=pd.Timestamp.now(), periods=260, freq="W")

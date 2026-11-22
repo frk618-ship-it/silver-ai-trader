@@ -177,6 +177,11 @@ def tab_overview():
         return
 
     up, pct = r.t1_up, r.t1_pct
+    vol = float(md.frame["price"].pct_change().tail(60).std() * 100)
+    if np.isfinite(vol) and vol > 0 and abs(pct) > 3 * vol:
+        st.warning(f"這次預測的明日漲跌 **{pct:+.2f}%**，超過近 60 日每日波動（約 ±{vol:.1f}%）的 3 倍，可信度很低。"
+                   + ("建議在「訓練」分頁把預測目標改成「對數報酬率」再訓練一次。" if r.params.pred_target != "logreturn" else "建議重新訓練或換一種模型。"),
+                   icon="⚠️")
     left, right = st.columns([1, 2.2])
     with left:
         st.markdown(ui.signal_card(up, pct, float(r.future_prices[0]), r.t1_confidence,

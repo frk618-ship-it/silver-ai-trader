@@ -1,6 +1,8 @@
 # Silver AI Trader — Python 版
-streamlit>=1.45
+# 只用 CPU 的 PyTorch（Linux 預設版本會多裝約 2 GB 的 GPU 函式庫，雲端主機用不到也裝不下）
+--extra-index-url https://download.pytorch.org/whl/cpu
 torch>=2.3
+streamlit>=1.45
 pandas>=2.2
 numpy>=1.26
 plotly>=5.22

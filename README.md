@@ -2,6 +2,9 @@
 
 白銀期貨多因子深度學習預測系統。
 
+> 🌐 **建議使用 Python 網頁版**：伺服器端抓資料，不受瀏覽器 CORS 限制，14 個資料來源全部可用。部署到 Streamlit Community Cloud 的步驟見 [`python/README.md`](python/README.md)。
+> 瀏覽器版（v2 與舊版）目前因為 Yahoo 不允許網頁直接讀取、公開 proxy 已失效，**無法取得資料**。
+>
 > ✨ **v2 網頁版（重新設計 UI／UX）** → https://frk618-ship-it.github.io/silver-ai-trader/v2/ ，說明見 [`v2/`](v2/README.md)。
 >
 > 🐍 **新版：Python（Streamlit + PyTorch）** → 見 [`python/`](python/README.md)，介面重新設計，執行 `streamlit run python/app.py`。
