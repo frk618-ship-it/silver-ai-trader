@@ -5,13 +5,10 @@
 > ✨ **v2 網頁版（重新設計 UI／UX）** → https://frk618-ship-it.github.io/silver-ai-trader/v2/ ，說明見 [`v2/`](v2/README.md)。
 >
 > 🐍 **新版：Python（Streamlit + PyTorch）** → 見 [`python/`](python/README.md)，介面重新設計，執行 `streamlit run python/app.py`。
-> 🔌 **需要資料中繼**：瀏覽器版必須透過自己的 Cloudflare Worker 抓資料，設定方式見 [`worker/README.md`](worker/README.md)（免費，約 5 分鐘）。
->
 > 以下為 HTML 版說明，HTML 版仍保留在 GitHub Pages 上。
 
 | 檔案 | 說明 |
 | --- | --- |
-| `worker/` | 資料中繼（Cloudflare Worker）與部署說明 |
 | `v2/` | **v2 網頁版**：重新設計的介面，模型與因子選項同 v20.3 |
 | `python/` | **V21 Python 版**：Streamlit 介面 + PyTorch 模型 |
 | `index.html` | **V20.4 Fast-Train**：訓練速度優化版（直接用瀏覽器開啟即可） |

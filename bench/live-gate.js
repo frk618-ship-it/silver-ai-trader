@@ -38,7 +38,7 @@ async function scenario(name, { history, stooqQuote, yahoo, snapshotFirst = fals
     const u = r.request().url();
     if (u.startsWith('http://app.local/')) return r.fulfill({ body: HTML, contentType: 'text/html' });
     for (const [re, f, ct] of LIBS) { const m = u.match(re); if (m) { const p = f(m); return r.fulfill({ body: p ? fs.readFileSync(p) : '', contentType: ct || 'application/javascript' }); } }
-    if (/stooq\.com\/q\/d\/l\/.*s=si(\.|%2E)f/i.test(u) && history) return r.fulfill({ body: history(), contentType: 'text/csv', headers: { 'access-control-allow-origin': '*' } });
+    if (/stooq\.com\/q\/d\/l\/.*s=si(%3D|=)f/i.test(u) && history) return r.fulfill({ body: history(), contentType: 'text/csv', headers: { 'access-control-allow-origin': '*' } });
     if (/stooq\.com\/q\/l\/.*si\.f/i.test(u) && !/proxy|allorigins|codetabs|thingproxy/.test(u) && stooqQuote) return r.fulfill({ body: stooqQuote(), contentType: 'text/csv', headers: { 'access-control-allow-origin': '*' } });
     if (/^https:\/\/query1\.finance\.yahoo\.com\/v8\/finance\/chart\/SI=F\?range=1d/.test(u) && yahoo) return r.fulfill({ body: yahoo(), contentType: 'application/json', headers: { 'access-control-allow-origin': '*' } });
     return r.abort();

@@ -26,16 +26,11 @@ function history(base, seed) {
   }
   return 'Date,Open,High,Low,Close,Volume\n' + rows.reverse().join('\n');
 }
-const BASE = { 'si.f': 30, 'slv.us': 27, 'gc.f': 2400, 'cl.f': 75, 'dx.f': 104, '^vix': 16, '10usy.b': 4.2, 'hg.f': 4.3 };
+const BASE = { 'si=f': 30, 'slv.us': 27, 'gc=f': 2400, 'cl=f': 75, 'dx-y.nyb': 104, '^vix': 16, '^tnx': 4.2, 'hg=f': 4.3 };
 const HIST = Object.fromEntries(Object.entries(BASE).map(([s, b], i) => [s, history(b, i)]));
-const lastSI = () => +HIST['si.f'].split('\n')[1].split(',')[4];
+const lastSI = () => +HIST['si=f'].split('\n')[1].split(',')[4];
 
-const RELAY = 'https://silver-proxy.test.workers.dev';
-const quoteJSON = (ageH = 0.1) => JSON.stringify({ chart: { result: [{ meta: {
-  regularMarketPrice: +(lastSI() * 1.004).toFixed(3), regularMarketTime: Math.floor((Date.now() - ageH * 3600e3) / 1000) } }] } });
-
-// realistic：模擬真實世界 —— Yahoo 回應沒有 CORS 標頭（瀏覽器擋下）、Stooq 拒絕連線；只有自有中繼能用
-async function setup(page, { quote = true, quoteAgeH = 0.1, realistic = false, relayLog = null } = {}) {
+async function setup(page, { quote = true, quoteAgeH = 0.1 } = {}) {
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
   await page.route('**/*', async r => {
@@ -48,24 +43,11 @@ async function setup(page, { quote = true, quoteAgeH = 0.1, realistic = false, r
     }
     for (const [re, fn, ct] of LIBS) { const m = u.match(re); if (m) return r.fulfill({ body: fs.readFileSync(fn(m)), contentType: ct || 'application/javascript' }); }
     const cors = { 'access-control-allow-origin': '*' };
-    if (realistic) {
-      if (u.startsWith(RELAY + '/')) {
-        const origin = r.request().headers()['origin'];
-        const t = new URL(u).searchParams.get('url') || '';
-        relayLog && relayLog.push({ origin, target: t });
-        const h = { 'access-control-allow-origin': origin || '*' };
-        const sm = t.match(/^https:\/\/stooq\.com\/q\/d\/l\/\?s=([^&]+)/);
-        if (sm && HIST[decodeURIComponent(sm[1])]) return r.fulfill({ body: HIST[decodeURIComponent(sm[1])], contentType: 'text/csv', headers: h });
-        if (/query[12]\.finance\.yahoo\.com\/v8\/finance\/chart\/SI=F\?range=1d/.test(t)) return r.fulfill({ body: quoteJSON(quoteAgeH), contentType: 'application/json', headers: h });
-        return r.fulfill({ status: 502, body: '{"error":"upstream"}', contentType: 'application/json', headers: h });
-      }
-      // Yahoo 直連：真實情況是回應沒有 CORS 標頭，網頁讀不到。Playwright 的模擬回應不檢查 CORS，所以直接以連線失敗模擬
-      return r.abort();
-    }
     const hm = u.match(/^https:\/\/stooq\.com\/q\/d\/l\/\?s=([^&]+)/);
     if (hm) { const s = decodeURIComponent(hm[1]); if (HIST[s]) return r.fulfill({ body: HIST[s], contentType: 'text/csv', headers: cors }); }
     if (quote && /^https:\/\/query1\.finance\.yahoo\.com\/v8\/finance\/chart\/SI=F\?range=1d/.test(u)) {
-      return r.fulfill({ contentType: 'application/json', headers: cors, body: quoteJSON(quoteAgeH) });
+      return r.fulfill({ contentType: 'application/json', headers: cors, body: JSON.stringify({ chart: { result: [{ meta: {
+        regularMarketPrice: +(lastSI() * 1.004).toFixed(3), regularMarketTime: Math.floor((Date.now() - quoteAgeH * 3600e3) / 1000) } }] } }) });
     }
     if (/publicreporting\.cftc\.gov\/resource\/72hh-3qpy/.test(u) && !/corsproxy|allorigins|codetabs|thingproxy/.test(u)) {
       const rows = []; for (let i = 0; i < 200; i++) rows.push({ as_of_date_form_yyyy_mm_dd: new Date(Date.now() - i * 7 * DAY).toISOString().slice(0, 10) + 'T00:00:00.000',
@@ -105,35 +87,6 @@ const ok = (c, m) => { console.log(`${c ? 'PASS' : 'FAIL'} ${m}`); if (!c) proce
     ok(/過舊/.test(await page.locator('.alert.bad').innerText()), '報價過舊時擋下並說明原因');
     await ctx.close();
   }
-  // 2b) 真實情境：沒有中繼 → 擋下；填入中繼網址 → 測試成功 → 自動進入
-  {
-    const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: 'dark' });
-    const page = await ctx.newPage();
-    const log = [];
-    const errs = await setup(page, { realistic: true, relayLog: log });
-    await page.goto('http://app.local/');
-    await page.getByText('無法取得白銀期貨即時價格').waitFor({ timeout: 120000 });
-    ok(await page.locator('#g-url').isVisible(), '真實情境：擋下並顯示中繼設定欄');
-    await page.screenshot({ path: `${SHOTS}/0b-gate-relay.png` });
-    await page.locator('#g-url').fill('https://bad-url');
-    await page.locator('#g-test').click();
-    await page.locator('#g-msg .down').waitFor({ timeout: 30000 });
-    ok(true, '錯誤的中繼網址顯示失敗訊息：' + (await page.locator('#g-msg').innerText()).slice(0, 40));
-    await page.locator('#g-url').fill(RELAY + '/');
-    await page.locator('#g-test').click();
-    await page.locator('#g-msg .up').waitFor({ timeout: 30000 });
-    await page.locator('.shell').waitFor({ timeout: 120000 });
-    ok(true, '中繼測試成功後自動進入主畫面');
-    ok(log.length > 0 && log.every(x => x.origin === 'http://app.local'), `資料經由中繼取得（${log.length} 次請求，皆帶 Origin）`);
-    ok(log.some(x => /stooq\.com\/q\/d\/l\/\?s=si\.f/.test(x.target)), 'Stooq 使用正確代號 si.f');
-    ok(await page.evaluate(() => localStorage.getItem('silver-proxy-url')) === RELAY, '中繼網址已儲存（去掉結尾斜線）');
-    await page.goto('http://app.local/#/factors');
-    await page.locator('#f-url').waitFor();
-    ok(await page.locator('#f-url').inputValue() === RELAY, '因子頁可看到並修改中繼設定');
-    ok(!errs.length, '真實情境沒有 JS 錯誤 ' + errs.join(' | '));
-    await ctx.close();
-  }
-
   // 3) 主流程（桌機）
   const ctx = await browser.newContext({ viewport: { width: 1360, height: 900 }, deviceScaleFactor: 1, colorScheme: 'dark' });
   const page = await ctx.newPage();

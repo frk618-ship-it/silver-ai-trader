@@ -33,49 +33,6 @@ function toast(msg, ms = 3200) {
   $('#toasts').appendChild(el);
   setTimeout(() => el.remove(), ms);
 }
-// ── 自有資料中繼（Cloudflare Worker）設定 ──
-const RELAY_KEY = 'silver-proxy-url';
-const GUIDE_URL = 'https://github.com/frk618-ship-it/silver-ai-trader/blob/main/worker/README.md';
-const relayUrl = () => { try { return localStorage.getItem(RELAY_KEY) || ''; } catch (_) { return ''; } };
-async function testRelay(u) {
-  u = (u || '').trim().replace(/\/+$/, '');
-  if (!/^https:\/\/[^\s/]+/.test(u)) throw new Error('網址需以 https:// 開頭');
-  const q = 'https://query1.finance.yahoo.com/v8/finance/chart/SI=F?range=1d&interval=1m';
-  const r = await fetch(`${u}/?url=${encodeURIComponent(q)}`, { signal: AbortSignal.timeout(15000) });
-  const t = await r.text();
-  let j = null; try { j = JSON.parse(t); } catch (_) {}
-  if (!r.ok) throw new Error((j && j.error) || `HTTP ${r.status}（Yahoo 回應 ${r.headers.get('x-proxy-upstream-status') || '—'}）`);
-  const m = j && j.chart && j.chart.result && j.chart.result[0] && j.chart.result[0].meta;
-  if (!m || !m.regularMarketPrice) throw new Error('中繼有回應，但不是 Yahoo 的資料');
-  return { url: u, price: m.regularMarketPrice };
-}
-function relayForm(prefix, compact = false) {
-  const cur = relayUrl();
-  return `<div class="field"><label for="${prefix}-url">資料中繼網址 ${tip('你自己的 Cloudflare Worker 網址。瀏覽器不能直接讀取 Yahoo／Stooq，免費的公開中繼又已停用，所以需要自己的中繼。')}</label>
-    <div class="row" style="flex-wrap:nowrap"><input class="input mono" id="${prefix}-url" placeholder="https://silver-proxy.你的名稱.workers.dev" value="${esc(cur)}" autocomplete="off" spellcheck="false">
-    <button class="btn" id="${prefix}-test">測試並儲存</button></div>
-    <span class="help" id="${prefix}-msg">${cur ? '目前已設定。' : '尚未設定。'}${compact ? '' : ` 還沒有中繼？<a href="${GUIDE_URL}" target="_blank" rel="noopener">5 分鐘建立教學</a>（免費）`}</span></div>`;
-}
-function bindRelay(prefix, onSaved) {
-  const btn = $(`#${prefix}-test`), msg = $(`#${prefix}-msg`), inp = $(`#${prefix}-url`);
-  if (!btn) return;
-  btn.onclick = async () => {
-    const v = inp.value.trim();
-    if (!v) { try { localStorage.removeItem(RELAY_KEY); } catch (_) {} msg.textContent = '已清除中繼設定。'; return; }
-    btn.disabled = true; msg.textContent = '測試中…';
-    try {
-      const r = await testRelay(v);
-      try { localStorage.setItem(RELAY_KEY, r.url); } catch (_) {}
-      msg.innerHTML = `<span class="up">✓ 連線成功，白銀期貨 ${px(r.price)}。已儲存。</span>`;
-      onSaved && onSaved();
-    } catch (e) {
-      const why = e.name === 'TypeError' ? '連不到這個網址（網址打錯、Worker 還沒部署，或 Worker 不允許這個網站呼叫）'
-        : e.name === 'TimeoutError' ? '等候逾時（15 秒）' : e.message;
-      msg.innerHTML = `<span class="down">✕ ${esc(why)}</span>`;
-    } finally { btn.disabled = false; }
-  };
-}
-
 function confirmDialog(title, body, okText = '確定', danger = false) {
   return new Promise((res) => {
     const d = document.createElement('dialog');
@@ -143,16 +100,11 @@ function renderGate(state = {}, error = null, hasSnap = false) {
     ${error ? `<div class="alert bad" style="margin-top:18px"><b>原因</b>${esc(error)}</div>
       <div class="row" style="margin-top:16px"><button class="btn primary lg" id="g-retry">${ico('refresh')} 重新嘗試</button>
       <button class="btn ghost" id="g-clear">清除快取後重試</button></div>
-      <div class="divider"></div>
-      <h3 style="margin:0 0 4px;font-size:15px">${relayUrl() ? '檢查資料中繼' : '還沒設定資料中繼？'}</h3>
-      <p class="faint" style="font-size:12.5px;margin:0 0 12px">瀏覽器不能直接讀取 Yahoo／Stooq 的資料，必須透過中繼。網路上免費的公開中繼已陸續停用，
-        建議用 Cloudflare 免費建立自己的中繼（約 5 分鐘），網址貼在下面即可。</p>
-      ${relayForm('g')}` : ''}
+      <p class="faint" style="font-size:12.5px;margin:14px 0 0">資料來源偶爾會暫時無法連線，通常重試即可。若持續失敗，請稍後再試或檢查網路。</p>` : ''}
   </div></div>`;
   if (error) {
     $('#g-retry').onclick = () => boot();
     $('#g-clear').onclick = () => { SE.MarketDataCache.clear(); boot(true); };
-    bindRelay('g', () => setTimeout(() => boot(), 600));
   }
 }
 
@@ -161,12 +113,7 @@ async function boot(skipSnapshot = false) {
   let snap = null;
   if (!skipSnapshot) { try { snap = await SE.AgentStore.get('snapshot', 'latest'); } catch (_) {} }
   const hasSnap = !!(snap && snap.data && snap.data.prices && snap.data.prices.length);
-  let gateErr = null;   // 一旦顯示錯誤，之後才到的進度更新不可把錯誤畫面蓋掉
-  const set = (k, s, msg) => {
-    if (gateErr) return;
-    st[k] = s; if (msg) st[k + 'Msg'] = msg;
-    renderGate(st, null, hasSnap);
-  };
+  const set = (k, s, msg) => { st[k] = s; if (msg) st[k + 'Msg'] = msg; renderGate(st, null, hasSnap); };
 
   if (hasSnap) {
     set('quote', 'run');
@@ -200,8 +147,7 @@ async function boot(skipSnapshot = false) {
     startApp();
   } catch (e) {
     for (const s of GATE_STEPS) if (st[s.k] === 'run') st[s.k] = s.k === 'aux' ? 'wait' : 'fail';
-    gateErr = e.message;
-    renderGate(st, gateErr, hasSnap);
+    renderGate(st, e.message, hasSnap);
   }
 }
 
@@ -728,8 +674,6 @@ function factors(v) {
         <p class="sub">${r ? `來自 ${fmtDate(r.lastDate)} 的預測（${esc(r.params.algorithm)}）` : '完成一次預測後會顯示'}</p>
         ${r ? SC.influenceBars(r.influence, unit) : `<div class="empty"><div class="art">🧭</div><p class="muted">還沒有預測。</p><a class="btn" href="#/overview">去產生判讀</a></div>`}</div>
     </div>
-    <div class="card" style="margin-top:16px"><h3>資料中繼</h3>
-      <p class="sub">所有 Yahoo／Stooq 等資料都會先經過這個中繼（你的 Cloudflare Worker）。更換後按右上角 ↻ 重新抓取。</p>${relayForm('f')}</div>
     ${Object.entries(C.GROUPS).map(([g, info]) => `<div class="card" style="margin-top:16px;--g:${info.color}">
       <div class="card-h"><h3 class="row" style="gap:10px"><span style="width:10px;height:10px;border-radius:3px;background:var(--g)"></span>${info.name}</h3></div>
       <div class="ftiles">${C.FACTORS.filter(f => f.group === g).map(f => {
@@ -742,7 +686,6 @@ function factors(v) {
           <span class="mono ${c >= 0 ? 'up' : 'down'}" style="font-size:12.5px" title="近 20 個交易日變化">${fin(c) && Math.abs(c) < 1000 ? pct(c, 1, true) : ''}</span></div>
           ${SC.sparkline(arr.slice(-60), 'var(--g)')}<span class="faint" style="font-size:11.5px">來源：${esc(f.src)}</span></div>`;
       }).join('')}</div></div>`).join('')}`;
-  bindRelay('f', () => toast('中繼已儲存，按右上角 ↻ 用新中繼重新抓取資料'));
 }
 
 // ══════════════════════════════════════════════════════════════
