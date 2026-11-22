@@ -1,0 +1,7 @@
+name = "silver-proxy"
+main = "silver-proxy.js"
+compatibility_date = "2024-09-23"
+
+# 允許呼叫此中繼的網頁來源（逗號分隔）；不設定時使用程式內的預設值
+# [vars]
+# ALLOWED_ORIGINS = "https://frk618-ship-it.github.io,http://localhost,http://127.0.0.1,null"
