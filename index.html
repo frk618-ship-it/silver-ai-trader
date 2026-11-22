@@ -2,57 +2,12 @@
 <html lang="zh-TW">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>白銀期貨 AI 預測</title>
-<meta name="description" content="白銀期貨（COMEX SI=F）多因子深度學習預測。">
-<meta name="theme-color" content="#0A0E12">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='%23F2F6F8'/><stop offset='1' stop-color='%237E94A3'/></linearGradient></defs><rect width='32' height='32' rx='8' fill='url(%23g)'/><text x='16' y='21' text-anchor='middle' font-family='monospace' font-weight='800' font-size='14' fill='%230A0E12'>Ag</text></svg>">
-<style>
-  :root { --bg:#0A0E12; --card:#121A20; --border:#22303B; --text:#E6EDF2; --text-2:#A7B4BE; --text-3:#6F7E8A;
-    --accent:#A9C7DB; --accent-2:#7FA7C2; --warn:#F5C26B; color-scheme: dark; }
-  @media (prefers-color-scheme: light) {
-    :root { --bg:#F4F6F8; --card:#FFFFFF; --border:#E1E7EC; --text:#0F1A22; --text-2:#4A5A66; --text-3:#7E8C97;
-      --accent:#2F5F80; --accent-2:#3F7398; --warn:#B7791F; color-scheme: light; }
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; background:
-    radial-gradient(60% 50% at 50% 0%, rgba(169,199,219,.12), transparent 70%), var(--bg);
-    color: var(--text); font: 15px/1.55 "Inter", "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", system-ui, sans-serif; }
-  .card { width: min(480px, 100%); background: var(--card); border: 1px solid var(--border); border-radius: 18px; padding: 28px; }
-  .brand { display: flex; align-items: center; gap: 12px; }
-  .ag { width: 42px; height: 42px; border-radius: 11px; display: grid; place-items: center; font: 800 16px ui-monospace, monospace;
-    color: #0A0E12; background: linear-gradient(160deg, #F2F6F8, #B9C8D2 45%, #7E94A3); }
-  .brand b { display: block; } .brand small { color: var(--text-3); font-size: 12.5px; }
-  h1 { font-size: 24px; margin: 24px 0 6px; letter-spacing: -.01em; }
-  p { color: var(--text-2); margin: 0 0 20px; }
-  .go { display: flex; align-items: center; justify-content: center; gap: 10px; height: 50px; border-radius: 12px; background: var(--accent);
-    color: var(--bg); font-weight: 700; font-size: 16px; text-decoration: none; }
-  .go:hover { background: var(--accent-2); }
-  .count { text-align: center; color: var(--text-3); font-size: 13px; margin-top: 12px; min-height: 20px; }
-  .count button { background: none; border: 0; color: var(--accent); cursor: pointer; font: inherit; padding: 0; text-decoration: underline; }
-  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
-</style>
+<meta http-equiv="refresh" content="0; url=https://silver-ai.streamlit.app/">
+<link rel="canonical" href="https://silver-ai.streamlit.app/">
+<script>location.replace('https://silver-ai.streamlit.app/');</script>
 </head>
 <body>
-<main class="card">
-  <div class="brand"><span class="ag">Ag</span><div><b>白銀期貨 AI 預測</b><small>COMEX SI=F · 多因子深度學習</small></div></div>
-  <h1>系統已搬到新網址</h1>
-  <p>新版在伺服器上抓取行情，即時報價、歷史價格與 24 項輔助因子都能取得，也不需要在自己的電腦上訓練。</p>
-  <a class="go" id="go" href="https://silver-ai.streamlit.app/">開啟白銀期貨 AI 預測 →</a>
-  <div class="count" id="count" aria-live="polite"></div>
-</main>
-<script>
-  // 5 秒後自動前往新網址；可按「留在此頁」取消
-  (function () {
-    var url = document.getElementById('go').href, n = 5, el = document.getElementById('count');
-    var t = setInterval(function () {
-      n -= 1;
-      if (n <= 0) { clearInterval(t); location.replace(url); return; }
-      el.firstChild.nodeValue = n + ' 秒後自動前往　';
-    }, 1000);
-    el.innerHTML = n + ' 秒後自動前往　<button type="button">留在此頁</button>';
-    el.querySelector('button').onclick = function () { clearInterval(t); el.textContent = '已取消自動前往。'; };
-  })();
-</script>
+<p>正在前往 <a href="https://silver-ai.streamlit.app/">https://silver-ai.streamlit.app/</a> …</p>
 </body>
 </html>

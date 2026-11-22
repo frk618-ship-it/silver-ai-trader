@@ -14,7 +14,7 @@
 | 路徑 | 說明 |
 | --- | --- |
 | `python/` | 主程式（Streamlit App、模型、資料來源、測試） |
-| `index.html` | GitHub Pages 首頁：導向 Streamlit App |
+| `index.html` | GitHub Pages 首頁：直接導向 https://silver-ai.streamlit.app/ |
 | `.streamlit/` | Streamlit Cloud 的主題設定 |
 | `.devcontainer/` | GitHub Codespaces／Dev Container 開發環境 |
 
