@@ -2,19 +2,22 @@
 
 白銀期貨多因子深度學習預測系統。
 
-> 🌐 **建議使用 Python 網頁版**：伺服器端抓資料，不受瀏覽器 CORS 限制，14 個資料來源全部可用。部署到 Streamlit Community Cloud 的步驟見 [`python/README.md`](python/README.md)。
+> 🌐 **立即使用：https://silver-ai.streamlit.app/** （Python 網頁版）
+> 伺服器端抓資料，不受瀏覽器 CORS 限制，14 個資料來源全部可用。部署方式見 [`python/README.md`](python/README.md)。
+> GitHub Pages 首頁（https://frk618-ship-it.github.io/silver-ai-trader/ ）會自動導向這個網址。
 > 瀏覽器版（v2 與舊版）目前因為 Yahoo 不允許網頁直接讀取、公開 proxy 已失效，**無法取得資料**。
 >
-> ✨ **v2 網頁版（重新設計 UI／UX）** → https://frk618-ship-it.github.io/silver-ai-trader/v2/ ，說明見 [`v2/`](v2/README.md)。
+> ✨ v2 網頁版（重新設計 UI／UX）→ https://frk618-ship-it.github.io/silver-ai-trader/v2/ ，說明見 [`v2/`](v2/README.md)。
 >
 > 🐍 **新版：Python（Streamlit + PyTorch）** → 見 [`python/`](python/README.md)，介面重新設計，執行 `streamlit run python/app.py`。
-> 以下為 HTML 版說明，HTML 版仍保留在 GitHub Pages 上。
+> 以下為 HTML 版（V20.4）說明，已移到 `v1/`：https://frk618-ship-it.github.io/silver-ai-trader/v1/
 
 | 檔案 | 說明 |
 | --- | --- |
 | `v2/` | **v2 網頁版**：重新設計的介面，模型與因子選項同 v20.3 |
-| `python/` | **V21 Python 版**：Streamlit 介面 + PyTorch 模型 |
-| `index.html` | **V20.4 Fast-Train**：訓練速度優化版（直接用瀏覽器開啟即可） |
+| `python/` | **V21 Python 版**：Streamlit 介面 + PyTorch 模型，部署在 https://silver-ai.streamlit.app/ |
+| `index.html` | GitHub Pages 首頁：自動導向 https://silver-ai.streamlit.app/ |
+| `v1/index.html` | **V20.4 Fast-Train**：訓練速度優化版（原首頁） |
 | `original-v20_3.html` | 原始 V20.3 instant-start 版本（對照用，未修改） |
 | `bench/` | 效能/正確性測試腳本（Playwright + 本機 TF.js） |
 

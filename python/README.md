@@ -2,6 +2,8 @@
 
 白銀期貨（COMEX **SI=F**）多因子深度學習預測系統，由 HTML／TensorFlow.js 版移植成 **Python + Streamlit + PyTorch**，並重新設計介面。
 
+**網址：https://silver-ai.streamlit.app/**
+
 ![總覽](docs/overview.png)
 
 > 總覽截圖為 2026-11-22 以真實行情實際執行的結果（BiGRU、對數報酬率、200 epochs）；其他截圖使用測試用的假資料。

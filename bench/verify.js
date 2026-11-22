@@ -5,7 +5,7 @@
 // 用法：npm i @tensorflow/tfjs@4.22.0 @tensorflow/tfjs-backend-wasm@4.22.0 playwright && node verify.js [webgl]
 const { chromium } = require('playwright');
 const fs = require('fs'), path = require('path'), http = require('http');
-const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+const html = fs.readFileSync(path.join(__dirname, '..', 'v1', 'index.html'), 'utf8');
 const a = html.indexOf('        class FusedBiGRU extends tf.layers.Layer');
 const b = html.indexOf('try { tf.serialization.registerClass(FusedLSTM); } catch (_) {}');
 if (a < 0 || b < 0) throw new Error('找不到融合層程式碼');

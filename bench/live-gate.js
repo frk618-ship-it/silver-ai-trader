@@ -3,7 +3,7 @@
 // 用法：node live-gate.js（需 bench/node_modules 內有 playwright、react、babel、tfjs 等，見 README）
 const { chromium } = require('playwright');
 const fs = require('fs'), path = require('path');
-const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'));
+const HTML = fs.readFileSync(path.join(__dirname, '..', 'v1', 'index.html'));
 const NM = path.join(__dirname, 'node_modules');
 const LIBS = [
   [/tfjs-backend-wasm@[^/]+\/dist\/(tfjs-backend-wasm[^/]*\.wasm)/, m => path.join(NM, '@tensorflow/tfjs-backend-wasm/dist', m[1]), 'application/wasm'],
