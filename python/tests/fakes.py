@@ -81,3 +81,69 @@ def install(monkeypatch=None, *, quote_ok=True, quote_age_h=0.2, history_ok=True
         else:
             setattr(mod, name, fn)
     return hist
+
+
+# ══════════════════════════════════════════════════════════════
+# 假 GitHub（Contents API）：給 storage 模組測試用
+# ══════════════════════════════════════════════════════════════
+import hashlib as _hashlib
+import base64 as _b64
+from urllib.parse import urlparse as _urlparse
+
+
+class _R:
+    def __init__(self, status, body=None, content=b""):
+        self.status_code, self._body, self.content = status, body, content
+
+    def json(self):
+        if self._body is None:
+            raise ValueError("no json")
+        return self._body
+
+
+class FakeGitHub:
+    def __init__(self, repo="me/silver-ai-data", token="tok", private=True, push=True):
+        self.repo, self.token, self.private, self.push = repo, token, private, push
+        self.files: dict[str, tuple[bytes, str]] = {}
+        self.commits: list[str] = []
+        self.calls = 0
+
+    def install(self, monkeypatch=None):
+        from silver_trader import storage
+        if monkeypatch is not None:
+            monkeypatch.setattr(storage, "_http", self.handle)
+        else:
+            storage._http = self.handle
+        return self
+
+    def handle(self, method, url, headers=None, params=None, json=None, timeout=None):
+        self.calls += 1
+        if (headers or {}).get("Authorization") != f"Bearer {self.token}":
+            return _R(401, {"message": "Bad credentials"})
+        path = _urlparse(url).path
+        base = f"/repos/{self.repo}"
+        if path == base and method == "GET":
+            return _R(200, {"private": self.private, "default_branch": "main", "permissions": {"push": self.push}})
+        if not path.startswith(base + "/contents/"):
+            return _R(404, {"message": "Not Found"})
+        fp = path[len(base + "/contents/"):]
+        cur = self.files.get(fp)
+        if method == "GET":
+            if not cur:
+                return _R(404, {"message": "Not Found"})
+            if "raw" in (headers or {}).get("Accept", ""):
+                return _R(200, None, cur[0])
+            return _R(200, {"sha": cur[1], "size": len(cur[0])})
+        if method == "PUT":
+            if not self.push:
+                return _R(403, {"message": "Resource not accessible by personal access token"})
+            if cur and json.get("sha") is None:
+                return _R(422, {"message": '"sha" wasn\'t supplied.'})
+            if cur and json.get("sha") != cur[1]:
+                return _R(409, {"message": "is at ... but expected ..."})
+            data = _b64.b64decode(json["content"])
+            sha = _hashlib.sha1(data + str(len(self.commits)).encode()).hexdigest()
+            self.files[fp] = (data, sha)
+            self.commits.append(json["message"])
+            return _R(201, {"content": {"sha": sha}})
+        return _R(405, {"message": "method"})

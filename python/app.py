@@ -16,7 +16,7 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from silver_trader import __version__, agent, config, market, pipeline, ui  # noqa: E402
+from silver_trader import __version__, agent, config, market, pipeline, storage, ui  # noqa: E402
 from silver_trader.backtest import run_backtest  # noqa: E402
 from silver_trader.config import BacktestConfig, SearchConfig, TrainParams  # noqa: E402
 from silver_trader.dataset import build_dataset  # noqa: E402
@@ -42,6 +42,61 @@ def header():
 def init_settings():
     if "params" not in ss:
         ss.params, ss.factors = pipeline.load_settings()
+
+
+# ══════════════════════════════════════════════════════════════
+# ☁️ 備份到 GitHub（Streamlit Cloud 的硬碟休眠或重新部署後會清空）
+# ══════════════════════════════════════════════════════════════
+@st.cache_resource(show_spinner=False)
+def get_store():
+    try:
+        return storage.store_from(st.secrets)
+    except storage.StorageError:
+        return None
+
+
+@st.cache_resource(show_spinner=False)
+def backup_state() -> dict:
+    """整個伺服器行程共用的備份狀態。"""
+    return {"hash": None, "at": None, "error": None, "restored": None}
+
+
+@st.cache_resource(show_spinner="從 GitHub 還原模型與預測紀錄…")
+def restore_once() -> dict:
+    """每個伺服器行程只做一次：本機沒有資料、且有設定備份時，自動從 GitHub 還原。"""
+    store = get_store()
+    if not store:
+        return {"state": "off"}
+    if storage.has_local_state():
+        return {"state": "local"}
+    try:
+        m = storage.restore(store)
+    except Exception as e:  # noqa: BLE001
+        backup_state()["error"] = str(e)
+        return {"state": "error", "error": str(e)}
+    if m is None:
+        return {"state": "empty"}
+    backup_state()["hash"] = storage.content_hash(storage.pack())
+    backup_state()["restored"] = m
+    return {"state": "restored", "manifest": m}
+
+
+def auto_backup(reason: str, force: bool = False) -> str | None:
+    """執行完訓練／預測後自動備份；回傳要顯示給使用者的一句話（沒有設定時回傳 None）。"""
+    store = get_store()
+    if not store:
+        return None
+    bs = backup_state()
+    try:
+        uploaded, h = storage.backup(store, reason, None if force else bs["hash"])
+    except Exception as e:  # noqa: BLE001
+        bs["error"] = str(e)
+        return f"⚠️ 備份到 GitHub 失敗：{e}"
+    bs["hash"], bs["error"] = h, None
+    if uploaded:
+        bs["at"] = datetime.now(timezone.utc)
+        return f"☁️ 已備份到 GitHub（{store.repo}）"
+    return "☁️ 內容沒有變化，不需要重新備份"
 
 
 def persist():
@@ -141,6 +196,9 @@ def execute(mode: str, p: TrainParams, factors: dict, box=None):
     r = pipeline.run(ss.md, p, factors, mode, on_epoch=on_epoch, on_status=on_status)
     prog.progress(1.0, text=f"完成 · 共 {r.seconds:.1f} 秒")
     ss.result = r
+    note = auto_backup("訓練完成" if mode != "predict" else "產生預測")
+    if note:
+        ss.backup_note = note
     return r
 
 
@@ -455,6 +513,68 @@ def tab_factors():
 # ══════════════════════════════════════════════════════════════
 # 分頁：代理紀錄
 # ══════════════════════════════════════════════════════════════
+def backup_panel():
+    st.markdown("##### ☁️ 備份與還原")
+    store = get_store()
+    bs = backup_state()
+    s = storage.summary()
+    if not store:
+        st.info("尚未設定自動備份：模型與紀錄只存在伺服器上，App 休眠或重新部署後會清空。"
+                "設定方式見 README 的「保存模型」（在 Streamlit 的 Secrets 填入 GITHUB_TOKEN 與 DATA_REPO）。"
+                "也可以用下面的下載／上傳手動保存。", icon="💡")
+    else:
+        if bs["error"]:
+            st.error(f"最近一次備份／還原失敗：{bs['error']}", icon="⚠️")
+        last = bs["at"].astimezone().strftime("%m/%d %H:%M") if bs["at"] else "本次啟動後尚未備份"
+        restored = bs.get("restored")
+        st.caption(f"自動備份到 **{store.repo}**（{storage.REMOTE_PATH}）· 最近一次備份：{last}"
+                   + (f" · 本次啟動已從備份還原（{restored.get('saved_at', '')}）" if restored else "")
+                   + "。每次訓練或預測完成後會自動備份。")
+        c1, c2, c3 = st.columns(3)
+        if c1.button("立即備份", width="stretch"):
+            note = auto_backup("手動備份", force=True)
+            (st.success if note and "失敗" not in note else st.error)(note or "未設定")
+        if c2.button("檢查連線", width="stretch"):
+            try:
+                info = store.check()
+                remote = store.info()
+                st.success(f"連線正常 · repo {'私人 🔒' if info['private'] else '⚠️ 公開（建議改成私人）'}"
+                           + (f" · 雲端備份 {remote.size / 1024:.0f} KB" if remote else " · 雲端還沒有備份"))
+            except Exception as e:  # noqa: BLE001
+                st.error(str(e))
+        confirm = c3.checkbox("用雲端備份覆蓋目前資料", key="confirm_restore")
+        if c3.button("從 GitHub 還原", width="stretch", disabled=not confirm):
+            try:
+                m = storage.restore(store)
+                if m is None:
+                    st.warning("雲端還沒有備份。")
+                else:
+                    bs["hash"], bs["restored"] = storage.content_hash(storage.pack()), m
+                    ss.pop("result", None)
+                    ss.pop("params", None)
+                    ss.backup_note = f"☁️ 已從 GitHub 還原（備份時間 {m.get('saved_at', '未知')}）"
+                    st.rerun()
+            except Exception as e:  # noqa: BLE001
+                st.error(f"還原失敗：{e}")
+    d1, d2 = st.columns(2)
+    with d1:
+        st.download_button("⬇️ 下載備份檔（zip）", storage.pack(), f"silver-ai-backup-{datetime.now():%Y%m%d-%H%M}.zip",
+                           "application/zip", width="stretch",
+                           help=f"冠軍模型：{'有' if s['has_champion'] else '無'} · 預測紀錄 {s.get('predictions', 0)} 筆")
+    with d2:
+        up = st.file_uploader("上傳備份檔還原", type=["zip"], label_visibility="collapsed")
+        if up is not None and st.button("用這個檔案還原", width="stretch"):
+            try:
+                m = storage.unpack(up.getvalue())
+                ss.pop("result", None)
+                ss.pop("params", None)
+                note = auto_backup("從上傳的備份檔還原")
+                ss.backup_note = "✅ 已從上傳的檔案還原" + (f"；{note}" if note else "")
+                st.rerun()
+            except storage.StorageError as e:
+                st.error(f"無法還原：{e}")
+
+
 def tab_agent():
     agent.resolve_predictions({d.date().isoformat(): float(v) for d, v in ss.md.frame["price"].items()})
     champ = agent.champion()
@@ -487,12 +607,16 @@ def tab_agent():
         st.dataframe(df.drop(columns=["params", "factors"], errors="ignore"), hide_index=True, width="stretch")
     with t3:
         st.dataframe(agent.table("runs"), hide_index=True, width="stretch")
+    backup_panel()
     with st.expander("危險區"):
         if st.button("清除所有代理紀錄與模型", type="secondary"):
             agent.clear_all()
             for pth in (pipeline.best_path(), pipeline.champion_path()):
                 pth.unlink(missing_ok=True)
             ss.pop("result", None)
+            note = auto_backup("清除所有紀錄與模型")
+            if note:
+                ss.backup_note = note
             st.toast("已清除", icon="🗑️")
             st.rerun()
 
@@ -500,7 +624,11 @@ def tab_agent():
 # ══════════════════════════════════════════════════════════════
 # 主程式
 # ══════════════════════════════════════════════════════════════
+_restore = restore_once()
 init_settings()
+if _restore["state"] == "restored" and not ss.get("restore_noted"):
+    ss.restore_noted = True
+    ss.backup_note = f"☁️ 已從 GitHub 還原冠軍模型與預測紀錄（備份時間 {_restore['manifest'].get('saved_at', '未知')}）"
 if "md" not in ss:
     gate()
     st.stop()
@@ -518,6 +646,9 @@ st.divider()
 flash_box = st.container()          # 位置固定：有沒有訊息都佔同一格，分頁才不會被重設回第一頁
 if ss.get("flash"):
     flash_box.success(ss.pop("flash"), icon="✅")
+if ss.get("backup_note"):
+    note = ss.pop("backup_note")
+    (flash_box.warning if "失敗" in note else flash_box.info)(note)
 
 pending = ss.pop("pending", None)
 tabs = st.tabs(["📊 總覽", "🧠 訓練", "🤖 AI 搜尋", "💹 回測", "🧩 因子與資料", "🏆 代理紀錄"])

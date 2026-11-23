@@ -54,3 +54,46 @@ def test_main_screen_and_training(monkeypatch):
     bt.click().run()
     assert not at.exception, at.exception
     assert any(m.label == "Sharpe" for m in at.metric)
+
+
+def test_app_backs_up_and_restores(monkeypatch, tmp_path):
+    """Streamlit 重新啟動（硬碟清空）後，自動從 GitHub 還原冠軍模型。"""
+    import streamlit as st
+    gh = fakes.FakeGitHub().install(monkeypatch)
+    fakes.install(monkeypatch)
+    monkeypatch.setenv("SILVER_TRADER_HOME", str(tmp_path / "run1"))
+    st.cache_resource.clear()
+    at = AppTest.from_file(APP, default_timeout=300)
+    at.secrets["GITHUB_TOKEN"] = "tok"
+    at.secrets["DATA_REPO"] = gh.repo
+    at.run()
+    assert not at.exception, at.exception
+    at.number_input[0].set_value(10)
+    next(b for b in at.button if b.label == "▶ 開始").click().run()
+    assert not at.exception, at.exception
+    assert len(gh.commits) == 1, gh.commits
+    assert any("已備份到 GitHub" in i.value for i in at.info)
+
+    # 模擬 Streamlit Cloud 休眠後喚醒：新的資料目錄、新的伺服器行程（清掉 cache_resource）
+    monkeypatch.setenv("SILVER_TRADER_HOME", str(tmp_path / "run2"))
+    st.cache_resource.clear()
+    at2 = AppTest.from_file(APP, default_timeout=300)
+    at2.secrets["GITHUB_TOKEN"] = "tok"
+    at2.secrets["DATA_REPO"] = gh.repo
+    at2.run()
+    assert not at2.exception, at2.exception
+    assert any("已從 GitHub 還原" in i.value for i in at2.info)
+    btn = next(b for b in at2.button if b.label == "用冠軍模型預測")
+    assert not btn.disabled
+    assert (tmp_path / "run2" / "models" / "champion.pt").exists()
+
+
+def test_app_without_backup_settings(monkeypatch):
+    import streamlit as st
+    fakes.install(monkeypatch)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("DATA_REPO", raising=False)
+    st.cache_resource.clear()
+    at = AppTest.from_file(APP, default_timeout=300).run()
+    assert not at.exception, at.exception
+    assert any("尚未設定自動備份" in i.value for i in at.info)

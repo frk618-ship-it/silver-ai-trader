@@ -28,9 +28,36 @@ Python 版在伺服器上抓資料，**沒有瀏覽器 CORS 的限制**，不需
 
 雲端版的注意事項：
 
-- **模型與紀錄不會永久保存**：App 閒置一段時間會休眠，或重新部署時，伺服器上的模型、冠軍、預測日誌都會清空，需要重新訓練。之後推到 `main` 的程式更新會自動重新部署。
+- **模型與紀錄**：App 休眠或重新部署時伺服器硬碟會清空；設定下方的「保存模型」後會自動備份與還原。
 - **速度**：免費主機 CPU 較少。標準 400 epochs 約 20 秒（LSTM／Transformer／TimesFM）到 70 秒（BiGRU）。
 - **相依套件**：`requirements.txt` 指定只裝 CPU 版 PyTorch，避免下載用不到的 GPU 函式庫。
+
+## 💾 保存模型（自動備份到 GitHub）
+
+雲端主機的硬碟是暫時的，休眠、重新部署後模型與紀錄會清空。設定後：
+
+- **自動備份**：每次訓練或預測完成，系統會把以下內容打包成 `silver-state.zip`，存到你的私人 repo。內容沒變化就不備份，所以不會產生多餘的 commit。
+  - 冠軍模型、最近一次訓練的模型
+  - 預測紀錄、設定
+- **自動還原**：App 重新啟動、本機沒有資料時，會自動從 repo 還原。
+- **手動操作**：「🏆 代理紀錄」分頁的「☁️ 備份與還原」可以立即備份、檢查連線、從 GitHub 還原，或下載／上傳備份檔。沒有設定 GitHub 時，也能用下載／上傳手動保存。
+
+設定步驟：
+
+1. 建立**私人** repo，例如 `silver-ai-data`，勾選 Add a README file。
+2. 建立 fine-grained token：https://github.com/settings/personal-access-tokens/new
+   - Repository access：**Only select repositories**，只選上面那個 repo。
+   - Repository permissions：**Contents → Read and write**，其餘維持 No access。
+3. 在 Streamlit App 的 **Settings → Secrets** 貼上：
+   ```toml
+   GITHUB_TOKEN = "github_pat_..."
+   DATA_REPO = "你的帳號/silver-ai-data"
+   ```
+
+安全：
+- 上傳或還原的模型檔一律用 PyTorch 的安全模式載入（`weights_only=True`），不會執行檔案裡的程式碼。
+- 備份檔只接受固定的幾個檔名。
+- token 只能讀寫指定的那個 repo；外洩時到 GitHub 刪除即可立即失效。
 
 ## 安裝與執行（本機）
 
@@ -97,12 +124,13 @@ pip install -r requirements-dev.txt
 python -m pytest -q tests
 ```
 
-36 項測試，全部以假網路執行（`tests/fakes.py`），不連外：
+48 項測試，全部以假網路與假 GitHub 執行（`tests/fakes.py`），不連外：
 
 - 即時報價閘門的各種失敗情境
 - 四種模型 × 四種預測目標
 - 訓練／接續／早停／交叉驗證
 - 回測、搜尋、晉升規則
+- 備份與還原：打包／解包、拒絕可疑檔名、GitHub 寫入衝突重試、重新啟動後自動還原冠軍模型
 - Streamlit 介面（AppTest）：沒有即時報價時擋在閘門、主畫面、訓練、回測
 
 用假資料手動預覽介面：`streamlit run tests/serve_fixture.py`

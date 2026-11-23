@@ -146,7 +146,9 @@ def save_model(model: SilverModel, path, meta: dict | None = None) -> None:
 
 
 def load_model(path) -> tuple[SilverModel, dict]:
-    ck = torch.load(path, map_location="cpu", weights_only=False)
+    # weights_only=True：只允許張量與基本型別，不會執行檔案裡的程式碼
+    # （模型檔可能來自使用者上傳或雲端備份，不能用會執行 pickle 程式碼的載入方式）
+    ck = torch.load(path, map_location="cpu", weights_only=True)
     c = ck["config"]
     m = build_model(c["algorithm"], c["lookback"], c["n_feat"], c["units"], c["pred_target"])
     m.load_state_dict(ck["state"])
