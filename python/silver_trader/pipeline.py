@@ -98,8 +98,10 @@ class RunResult:
 
 
 def _compatible(meta_cfg: dict, p: TrainParams, ds: Dataset) -> bool:
+    horizon = p.future_days if p.pred_target == "multi" else 1
     return (meta_cfg.get("algorithm") == p.algorithm and meta_cfg.get("lookback") == p.lookback
-            and meta_cfg.get("n_feat") == ds.n_features and meta_cfg.get("pred_target") == p.pred_target)
+            and meta_cfg.get("n_feat") == ds.n_features and meta_cfg.get("pred_target") == p.pred_target
+            and meta_cfg.get("horizon", 1) == horizon)
 
 
 def _try_load(path, p: TrainParams | None, ds: Dataset) -> tuple[SilverModel | None, dict]:
@@ -190,7 +192,7 @@ def run(md: MarketData, p: TrainParams, factors: dict[str, bool], mode: str = "t
     fc = forecast(model, ds, p.future_days)
     infl = factor_influence(model, ds) if ds.n_features > 1 else {}
     last_date = data.frame.index[-1].date()
-    fut_dates = agent.next_trading_days(last_date, p.future_days)
+    fut_dates = agent.next_trading_days(last_date, len(fc.prices))   # 多日模型的天數由模型決定
 
     # ── 保留集：挑戰者 vs 冠軍（同一段資料）──
     challenger = score_holdout(model, ds, train_end) if hold else {"holdout_da": float("nan"), "holdout_mape": float("nan"), "holdout_n": 0}

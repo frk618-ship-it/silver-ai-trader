@@ -238,7 +238,7 @@ def tab_overview():
     vol = float(md.frame["price"].pct_change().tail(60).std() * 100)
     if np.isfinite(vol) and vol > 0 and abs(pct) > 3 * vol:
         st.warning(f"這次預測的明日漲跌 **{pct:+.2f}%**，超過近 60 日每日波動（約 ±{vol:.1f}%）的 3 倍，可信度很低。"
-                   + ("建議在「訓練」分頁把預測目標改成「對數報酬率」再訓練一次。" if r.params.pred_target != "logreturn" else "建議重新訓練或換一種模型。"),
+                   + ("建議在「訓練」分頁把預測目標改成「多日報酬率」再訓練一次。" if r.params.pred_target not in ("logreturn", "multi") else "建議重新訓練或換一種模型。"),
                    icon="⚠️")
     left, right = st.columns([1, 2.2])
     with left:
@@ -261,7 +261,13 @@ def tab_overview():
                   delta=None if not r.champion else f"{hd - r.champion['holdout_da']:+.2f} vs 冠軍",
                   help="最後一段完全沒參與訓練的資料上的命中率，比全期數字更可信")
         m3.metric("平均誤差 MAPE", ui.fmt_pct(r.mape))
-        m4.metric("交叉驗證 DA", ui.fmt_pct(r.cv["da"]) if r.cv else "—", help="只有選擇「時序交叉驗證」時才會計算")
+        hh = r.challenger.get("holdout_da_h")
+        if hh is not None:
+            H = r.challenger.get("horizon", len(r.future_prices))
+            m4.metric(f"保留集 T+{H} 方向準確率", ui.fmt_pct(hh),
+                      help=f"模型直接預測 {H} 個交易日後的漲跌，在保留集上的命中率（{r.challenger.get('holdout_n_h', 0)} 筆）")
+        else:
+            m4.metric("交叉驗證 DA", ui.fmt_pct(r.cv["da"]) if r.cv else "—", help="只有選擇「時序交叉驗證」時才會計算")
         badge = "🏆 已晉升為冠軍" if r.promoted else ("🛡️ 未晉升" if r.mode != "predict" else f"📦 {r.model_source}")
         st.caption(f"{badge}　{r.verdict}　·　{r.params.algorithm} · {config.PRED_TARGETS[r.params.pred_target]} · "
                    f"lookback {r.params.lookback} · {sum(r.factors.values()) + 1} 個因子 · 用時 {r.seconds:.1f} 秒")
@@ -285,11 +291,16 @@ def settings_form() -> tuple[TrainParams, dict]:
     targets = list(config.PRED_TARGETS)
     target = c2.selectbox("預測目標", targets, index=targets.index(p.pred_target),
                           format_func=lambda k: config.PRED_TARGETS[k],
-                          help="價格迴歸：預測下一日價格；方向分類：預測漲跌機率；雙頭：兩者兼具；對數報酬率：預測報酬率")
+                          help="多日報酬率（建議）：一次直接預測 T+1…T+N 的累積報酬率；價格迴歸：預測下一日價格；"
+                               "方向分類：預測漲跌機率；雙頭：兩者兼具；對數報酬率：預測隔日報酬率（多日靠遞迴）")
     lookback = c3.slider("Lookback（天）", 5, 60, p.lookback, 1, help="每個樣本看過去幾天的資料")
     c1, c2, c3 = st.columns(3)
     layers = c1.select_slider("隱藏單元", [16, 32, 48, 64, 96, 128], value=p.layers)
-    future = c2.slider("預測天數 T+N", 1, 10, p.future_days)
+    if target == "multi":
+        future = c2.slider("預測天數 T+N（模型直接輸出）", 2, 10, max(2, p.future_days),
+                           help="模型一次輸出 T+1…T+N；天數在訓練時固定，改天數需要重新訓練")
+    else:
+        future = c2.slider("預測天數 T+N（逐日遞迴）", 1, 10, p.future_days)
     years = c3.select_slider("使用資料年數", [1.0, 1.5, 2.0, 3.0, 4.0, 5.0], value=float(p.history_years))
     st.markdown("##### 訓練")
     c1, c2, c3, c4 = st.columns(4)

@@ -80,6 +80,7 @@ PRED_TARGETS = {
     "direction": "方向分類",
     "dual": "雙頭（價格＋方向）",
     "logreturn": "對數報酬率",
+    "multi": "多日報酬率（直接預測 T+1…T+N）",
 }
 
 
@@ -88,7 +89,8 @@ class TrainParams:
     algorithm: str = "BiGRU"
     # 預設用對數報酬率：實測真實資料時，直接預測「價格水準」的誤差（3–7%）和單日漲跌差不多大，
     # 推算出的明日漲跌幅會失真（例如 +16%）；預測報酬率的幅度合理，價格誤差也較小。
-    pred_target: str = "logreturn"
+    # 預設「多日報酬率」：一次直接預測 T+1…T+N 的累積報酬率，不靠逐日遞迴（遞迴時其他因子停在今天，越往後越失真）
+    pred_target: str = "multi"
     lookback: int = 10
     layers: int = 32
     epochs: int = 400
@@ -96,7 +98,7 @@ class TrainParams:
     lr: float = 0.001
     directional_lambda: float = 0.3
     huber_delta: float = 1.0
-    future_days: int = 3
+    future_days: int = 5          # 多日報酬率：模型輸出的天數（訓練時固定）；其他目標：遞迴預測的天數
     history_years: float = 2.0
     validation_mode: str = "none"   # none | kfold
     k_folds: int = 5

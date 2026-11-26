@@ -35,6 +35,8 @@ class Dataset:
     logret_mean: float
     logret_std: float
     dates: pd.DatetimeIndex  # 原始序列日期
+    X_live: np.ndarray | None = None   # [lookback, F] 以「最新一天」結尾的時間窗：預測未來用
+    prices: np.ndarray | None = None   # 原始價格序列（多日目標用）
 
     @property
     def price_scaler(self) -> Scaler:
@@ -50,7 +52,31 @@ class Dataset:
     def norm_price(self, v):
         return np.clip(self.price_scaler.scale(v), 0, 1)
 
-    def target_array(self, pred_target: str) -> np.ndarray:
+    def multi_targets(self, horizon: int, stats: tuple | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """直接多日目標：每個樣本從「前一日收盤」到 T+1…T+H 的累積對數報酬率（各欄標準化）。
+
+        回傳 (Y [N, H]，未來資料不足的列為 NaN；各欄平均；各欄標準差)。
+        stats 可傳入訓練時的 (mean, std)，預測時才能用同一個尺度還原。
+        """
+        H = int(horizon)
+        r = np.full((len(self.target_idx), H), np.nan)
+        T = len(self.prices)
+        for i, t in enumerate(self.target_idx):
+            end = min(T, t + H)
+            if end > t:
+                r[i, :end - t] = np.log(self.prices[t:end] / self.prices[t - 1])
+        if stats is None:
+            mu = np.nanmean(r, axis=0)
+            sd = np.nanstd(r, axis=0)
+            sd = np.where(np.isfinite(sd) & (sd > 0), sd, 1.0)
+            mu = np.where(np.isfinite(mu), mu, 0.0)
+        else:
+            mu, sd = (np.asarray(v, dtype=float) for v in stats)
+        return ((r - mu) / sd).astype(np.float32), mu, sd
+
+    def target_array(self, pred_target: str, horizon: int = 1, stats: tuple | None = None) -> np.ndarray:
+        if pred_target == "multi":
+            return self.multi_targets(horizon, stats)[0]
         if pred_target == "logreturn":
             return self.y_logret[:, None]
         if pred_target == "direction":
@@ -62,7 +88,7 @@ class Dataset:
     def subset(self, idx) -> "Dataset":
         return Dataset(self.X[idx], self.y[idx], self.y_dir[idx], self.y_logret[idx], self.prev_prices[idx],
                        self.target_idx[idx], self.feature_keys, self.scalers, self.logret_mean,
-                       self.logret_std, self.dates)
+                       self.logret_std, self.dates, self.X_live, self.prices)
 
 
 def active_keys(selected: dict[str, bool]) -> list[str]:
@@ -96,8 +122,10 @@ def build_dataset(frame: pd.DataFrame, lookback: int, selected: dict[str, bool],
         lr = np.where((p_prev > 0) & (p_now > 0), np.log(p_now / p_prev), 0.0)
     mu = float(lr.mean()) if len(lr) else 0.0
     sd = float(lr.std()) or 1.0
+    # 預測未來時要用「以最新一天結尾」的時間窗；X[-1] 結尾在倒數第二天（它的目標是最新一天）
+    X_live = np.ascontiguousarray(M[T - lookback:T])
     return Dataset(X, y, y_dir, ((lr - mu) / sd).astype(np.float32), p_prev.astype(float), tidx, keys,
-                   scalers, mu, sd, frame.index)
+                   scalers, mu, sd, frame.index, X_live, prices.astype(float))
 
 
 def split_holdout(n: int, frac: float = 0.15, min_hold: int = 20) -> tuple[int, int]:

@@ -70,6 +70,11 @@ def build(days: int = 7, top: int = 8, store=None, home: Path | None = None) -> 
             "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "model": {
                 "source": r.model_source,
+                # direct = 一次直接輸出 T+1…T+H（多日報酬率）；recursive = 逐日遞迴推算
+                "method": "direct" if r.params.pred_target == "multi" else "recursive",
+                "horizon": len(r.future_prices),
+                "holdout_da_h": None if r.challenger.get("holdout_da_h") is None else round(float(r.challenger["holdout_da_h"]), 1),
+                "holdout_n_h": r.challenger.get("holdout_n_h"),
                 "algorithm": r.params.algorithm,
                 "pred_target": r.params.pred_target,
                 "pred_target_name": config.PRED_TARGETS.get(r.params.pred_target, r.params.pred_target),
@@ -88,6 +93,8 @@ def build(days: int = 7, top: int = 8, store=None, home: Path | None = None) -> 
                       "p_up": None if probs is None or i >= len(probs) else round(float(probs[i]) * 100, 1)}
                      for i, (d, p) in enumerate(zip(r.future_dates, r.future_prices))],
             "drivers": [{"name": k, "effect": round(float(v), 4)} for k, v in infl],
+            # 多日模型的因子影響是對最後一天（T+H）的預測價格；其他模型是對隔日
+            "drivers_horizon": len(r.future_prices) if r.params.pred_target == "multi" else 1,
             "data_sources": {"real": sum(s.real for s in md.status), "total": len(md.status)},
         }
     finally:

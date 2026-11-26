@@ -35,10 +35,29 @@ def _sigmoid(z):
     return 1 / (1 + np.exp(-np.asarray(z, float)))
 
 
+def _multi_stats(model: SilverModel) -> tuple[np.ndarray, np.ndarray]:
+    H = model.horizon
+    if model.multi_stats is None:
+        return np.zeros(H), np.ones(H)
+    return np.asarray(model.multi_stats[0], dtype=float), np.asarray(model.multi_stats[1], dtype=float)
+
+
+def _live_window(ds: Dataset) -> np.ndarray:
+    """以最新一天結尾的時間窗（舊資料集沒有 X_live 時退回 X[-1]）。"""
+    return ds.X_live if ds.X_live is not None else ds.X[-1]
+
+
+def _last_price(ds: Dataset) -> float:
+    return float(ds.prices[-1]) if ds.prices is not None else float(ds.denorm_price(ds.y[-1]))
+
+
 def model_prices(model: SilverModel, ds: Dataset) -> tuple[np.ndarray, np.ndarray | None]:
     """對資料集每個樣本推論，回傳 (預測價格, 方向機率或 None)。"""
     out = model.predict(ds.X)
     t = model.pred_target
+    if t == "multi":
+        mu, sd = _multi_stats(model)
+        return ds.prev_prices * np.exp(out[:, 0] * sd[0] + mu[0]), None     # 第 1 欄 = T+1
     if t == "logreturn":
         r = out[:, 0] * ds.logret_std + ds.logret_mean
         return ds.prev_prices * np.exp(r), None
@@ -58,11 +77,22 @@ class Forecast:
 
 
 def forecast(model: SilverModel, ds: Dataset, days: int) -> Forecast:
-    """迭代式 T+N：每一步把預測價格寫回最後一列的價格特徵，再往前滑動。"""
-    win = ds.X[-1].copy()
+    """未來 N 個交易日。
+
+    · 多日報酬率（multi）：一次直接輸出 T+1…T+H 的累積報酬率，不遞迴。
+    · 其他目標：迭代式，每一步把預測價格寫回最後一列的價格特徵再往前滑動
+      （其他因子停在最新一天的值，所以越往後越不可靠）。
+    兩者都從「以最新一天結尾」的時間窗出發。
+    """
+    win = _live_window(ds).copy()
     t = model.pred_target
-    last_price = float(ds.denorm_price(ds.y[-1]))
-    last_scaled = float(ds.y[-1])
+    last_price = _last_price(ds)
+    if t == "multi":
+        mu, sd = _multi_stats(model)
+        r = model.predict(win[None])[0] * sd + mu
+        k = min(int(days), model.horizon)
+        return Forecast(last_price * np.exp(r[:k]), None)
+    last_scaled = float(win[-1, 0])
     prices, probs = [], []
     for _ in range(days):
         o = model.predict(win[None])[0]
@@ -93,7 +123,7 @@ def factor_influence(model: SilverModel, ds: Dataset, delta: float = 0.05) -> di
     """中央差分敏感度：把最後一天的某個因子 ±delta，看 T+1 預測價格變化（美元）。"""
     from .config import FACTOR_NAME
 
-    base = ds.X[-1]
+    base = _live_window(ds)
     batch = []
     for j in range(1, ds.n_features):
         for sgn in (1, -1):
@@ -104,9 +134,11 @@ def factor_influence(model: SilverModel, ds: Dataset, delta: float = 0.05) -> di
         return {}
     out = model.predict(np.stack(batch))
     t = model.pred_target
-    if t == "logreturn":
-        prev = ds.prev_prices[-1]
-        vals = prev * np.exp(out[:, 0] * ds.logret_std + ds.logret_mean)
+    if t == "multi":      # 對最後一天（T+H）預測價格的影響
+        mu, sd = _multi_stats(model)
+        vals = _last_price(ds) * np.exp(out[:, -1] * sd[-1] + mu[-1])
+    elif t == "logreturn":
+        vals = _last_price(ds) * np.exp(out[:, 0] * ds.logret_std + ds.logret_mean)
     elif t == "direction":
         vals = out[:, 0] * 100        # 機率百分點
     else:
@@ -124,6 +156,18 @@ def score_holdout(model: SilverModel, ds: Dataset, start: int) -> dict:
     sub = ds.subset(np.arange(start, len(ds.X)))
     preds, probs = model_prices(model, sub)
     actual = ds.denorm_price(sub.y)
-    return {"holdout_da": direction_accuracy(actual, sub.prev_prices, preds, probs, model.pred_target),
-            "holdout_mape": mape(actual, preds) if model.pred_target != "direction" else float("nan"),
-            "holdout_n": int(len(sub.X))}
+    out = {"holdout_da": direction_accuracy(actual, sub.prev_prices, preds, probs, model.pred_target),
+           "holdout_mape": mape(actual, preds) if model.pred_target != "direction" else float("nan"),
+           "holdout_n": int(len(sub.X))}
+    if model.pred_target == "multi" and model.horizon > 1:
+        # T+H 的方向命中率（只算 T+H 已經有實際價格的樣本）
+        H = model.horizon
+        raw, _, _ = sub.multi_targets(H, stats=(np.zeros(H), np.ones(H)))
+        ok = ~np.isnan(raw[:, -1])
+        if ok.any():
+            mu, sd = _multi_stats(model)
+            pred_r = model.predict(sub.X[ok])[:, -1] * sd[-1] + mu[-1]
+            out["holdout_da_h"] = float(np.mean((pred_r >= 0) == (raw[ok, -1] >= 0)) * 100)
+            out["holdout_n_h"] = int(ok.sum())
+            out["horizon"] = H
+    return out

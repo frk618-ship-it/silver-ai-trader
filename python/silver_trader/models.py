@@ -7,7 +7,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-OUTPUT_UNITS = {"price": 1, "direction": 1, "dual": 2, "logreturn": 1}
+OUTPUT_UNITS = {"price": 1, "direction": 1, "dual": 2, "logreturn": 1}   # multi：輸出 horizon 個單元
+
+
+def output_units(pred_target: str, horizon: int = 1) -> int:
+    return max(1, int(horizon)) if pred_target == "multi" else OUTPUT_UNITS[pred_target]
 
 
 class BiGRUNet(nn.Module):
@@ -103,9 +107,12 @@ class TimesFMNet(nn.Module):
 
 
 class SilverModel(nn.Module):
-    def __init__(self, algorithm: str, lookback: int, n_feat: int, units: int, pred_target: str):
+    def __init__(self, algorithm: str, lookback: int, n_feat: int, units: int, pred_target: str, horizon: int = 1):
         super().__init__()
-        self.config = dict(algorithm=algorithm, lookback=lookback, n_feat=n_feat, units=units, pred_target=pred_target)
+        self.horizon = max(1, int(horizon)) if pred_target == "multi" else 1
+        self.multi_stats = None   # 多日目標的 (各欄平均, 各欄標準差)，訓練時決定、隨模型存檔
+        self.config = dict(algorithm=algorithm, lookback=lookback, n_feat=n_feat, units=units, pred_target=pred_target,
+                           horizon=self.horizon)
         if algorithm == "BiGRU":
             self.body = BiGRUNet(n_feat, units)
         elif algorithm == "LSTM":
@@ -116,8 +123,12 @@ class SilverModel(nn.Module):
             self.body = TimesFMNet(n_feat, units, lookback)
         else:
             raise ValueError(f"未知的演算法：{algorithm}")
-        self.head = nn.Linear(self.body.out_dim, OUTPUT_UNITS[pred_target])
+        self.head = nn.Linear(self.body.out_dim, output_units(pred_target, self.horizon))
         self.pred_target = pred_target
+
+    def set_multi_stats(self, mu, sd) -> None:
+        self.multi_stats = ([float(v) for v in mu], [float(v) for v in sd])
+        self.config["multi_stats"] = [list(self.multi_stats[0]), list(self.multi_stats[1])]
 
     def forward(self, x):
         """回傳原始輸出（direction 為 logit；dual 欄 1 為 logit）。"""
@@ -134,11 +145,12 @@ class SilverModel(nn.Module):
             if self.pred_target == "direction":
                 o = torch.sigmoid(o)
             outs.append(o)
-        return torch.cat(outs).numpy() if outs else torch.empty(0, OUTPUT_UNITS[self.pred_target]).numpy()
+        return torch.cat(outs).numpy() if outs else torch.empty(0, output_units(self.pred_target, self.horizon)).numpy()
 
 
-def build_model(algorithm: str, lookback: int, n_feat: int, units: int, pred_target: str) -> SilverModel:
-    return SilverModel(algorithm, lookback, n_feat, units, pred_target)
+def build_model(algorithm: str, lookback: int, n_feat: int, units: int, pred_target: str,
+                horizon: int = 1) -> SilverModel:
+    return SilverModel(algorithm, lookback, n_feat, units, pred_target, horizon)
 
 
 def save_model(model: SilverModel, path, meta: dict | None = None) -> None:
@@ -150,7 +162,9 @@ def load_model(path) -> tuple[SilverModel, dict]:
     # （模型檔可能來自使用者上傳或雲端備份，不能用會執行 pickle 程式碼的載入方式）
     ck = torch.load(path, map_location="cpu", weights_only=True)
     c = ck["config"]
-    m = build_model(c["algorithm"], c["lookback"], c["n_feat"], c["units"], c["pred_target"])
+    m = build_model(c["algorithm"], c["lookback"], c["n_feat"], c["units"], c["pred_target"], c.get("horizon", 1))
     m.load_state_dict(ck["state"])
+    if c.get("multi_stats"):
+        m.set_multi_stats(*c["multi_stats"])
     m.eval()
     return m, ck.get("meta", {})

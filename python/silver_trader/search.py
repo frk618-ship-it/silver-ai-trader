@@ -99,10 +99,15 @@ def run_trial(frame: pd.DataFrame, p: TrainParams, factors: dict, cfg: SearchCon
     import torch
 
     with torch.no_grad():
-        X = torch.as_tensor(val.X)
-        Y = torch.as_tensor(val.target_array(p.pred_target), dtype=torch.float32)
-        prev = torch.as_tensor(val.norm_price(val.prev_prices), dtype=torch.float32)[:, None]
-        vloss = float(compute_loss(m(X), Y, prev, p.pred_target, p))
+        if p.pred_target == "multi":
+            from .training import _multi_rows
+            keep, Ynp = _multi_rows(m, val, np.arange(len(val.X)))
+        else:
+            keep, Ynp = np.arange(len(val.X)), val.target_array(p.pred_target)
+        X = torch.as_tensor(val.X[keep])
+        Y = torch.as_tensor(Ynp, dtype=torch.float32)
+        prev = torch.as_tensor(val.norm_price(val.prev_prices[keep]), dtype=torch.float32)[:, None]
+        vloss = float(compute_loss(m(X), Y, prev, p.pred_target, p)) if len(keep) else float("nan")
     return Trial(idx, p, factors, vloss, da, time.perf_counter() - t0, epochs)
 
 

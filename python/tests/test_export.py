@@ -42,8 +42,22 @@ def test_export_uses_backed_up_champion(monkeypatch, tmp_path):
     assert all(r["p_up"] is not None and 0 <= r["p_up"] <= 100 for r in out["path"])   # 雙頭模型有方向機率
     assert out["base_price"] > 0 and out["live_quote"]["price"] > 0
     assert 0 < len(out["drivers"]) <= 8
+    assert out["model"]["method"] == "recursive" and out["drivers_horizon"] == 1
     # 匯出不可改動 App 自己的資料目錄
     assert not (tmp_path / "out" / "models").exists()
+
+
+def test_export_multi_model(monkeypatch, tmp_path):
+    gh = fakes.FakeGitHub().install(monkeypatch)
+    fakes.install(monkeypatch)
+    md = market.load_market()
+    pipeline.run(md, TrainParams(epochs=4, seed=2, pred_target="multi", future_days=5), config.default_factors(), "train_new")
+    storage.backup(storage.GitHubStore("tok", gh.repo), "訓練完成")
+    out = export.build(days=7, store=storage.GitHubStore("tok", gh.repo), home=tmp_path / "exp")
+    m = out["model"]
+    assert m["method"] == "direct" and m["horizon"] == 5 and len(out["path"]) == 5
+    assert m["holdout_da_h"] is not None and out["drivers_horizon"] == 5
+    assert all(r["p_up"] is None for r in out["path"])
 
 
 def test_export_fails_clearly_without_backup(monkeypatch, tmp_path, capsys):

@@ -45,7 +45,7 @@ def test_pack_unpack_roundtrip(md, home, tmp_path):
     assert "cache/market_snapshot.pkl" not in names          # 行情快取不備份
     shutil.rmtree(home)
     m = storage.unpack(data)
-    assert m["summary"]["has_champion"] and storage.summary()["predictions"] == 3
+    assert m["summary"]["has_champion"] and storage.summary()["predictions"] == 5   # 預設預測 5 天
 
 
 @pytest.mark.parametrize("bad,msg", [
@@ -79,7 +79,7 @@ def test_backup_restore_cycle(md, home, gh):
     shutil.rmtree(home)                                           # 模擬 Streamlit Cloud 重新啟動
     assert not storage.has_local_state()
     m = storage.restore(store)
-    assert m and storage.summary()["predictions"] == 5
+    assert m and storage.summary()["predictions"] == 7    # 訓練 5 天 + 預測 2 天
     r2 = pipeline.run(md, TrainParams(future_days=1), config.default_factors(), "predict")
     assert r2.model_source == "冠軍模型"
     assert agent.champion()["algorithm"] == r.params.algorithm

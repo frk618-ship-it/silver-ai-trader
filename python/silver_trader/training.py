@@ -48,7 +48,7 @@ def compute_loss(out, y, prev, target: str, p: TrainParams):
         price = F.huber_loss(out[:, :1], y[:, :1], delta=p.huber_delta)
         bce = F.binary_cross_entropy_with_logits(out[:, 1:], y[:, 1:])
         return price + p.directional_lambda * bce
-    if target == "logreturn":
+    if target in ("logreturn", "multi"):
         return F.huber_loss(out, y, delta=p.huber_delta)
     return directional_huber(out, y, prev, p.directional_lambda, p.huber_delta)
 
@@ -83,8 +83,14 @@ def train_model(model: SilverModel, ds: Dataset, p: TrainParams, idx: np.ndarray
     epochs = p.epochs if epochs is None else epochs
     patience = p.early_stop_patience if patience is None else patience
     target = model.pred_target
+    if target == "multi":
+        idx, Ynp = _multi_rows(model, ds, idx)
+        if len(idx) == 0:
+            raise ValueError("資料不足以建立多日預測的訓練樣本，請增加資料年數或減少預測天數")
+    else:
+        Ynp = ds.target_array(target)[idx]
     X = torch.as_tensor(ds.X[idx])
-    Y = torch.as_tensor(ds.target_array(target)[idx], dtype=torch.float32)
+    Y = torch.as_tensor(Ynp, dtype=torch.float32)
     prev = torch.as_tensor(ds.norm_price(ds.prev_prices[idx]), dtype=torch.float32)[:, None]
     n = len(X)
     bs = max(1, min(p.batch_size, n))
@@ -129,9 +135,32 @@ def train_model(model: SilverModel, ds: Dataset, p: TrainParams, idx: np.ndarray
     return res
 
 
+def _multi_rows(model: SilverModel, ds: Dataset, idx: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """直接多日目標的訓練列。
+
+    · 剔除「目標日期超出這批訓練資料」的樣本：否則 T+H 的答案會落在保留集（或下一個驗證折）裡，
+      等於偷看答案。
+    · 標準化的平均與標準差只用訓練列計算，並存進模型（預測時用同一個尺度還原）。
+    """
+    H = model.horizon
+    idx = np.asarray(idx)
+    if len(idx) == 0:
+        return idx, np.empty((0, H), dtype=np.float32)
+    raw, _, _ = ds.multi_targets(H, stats=(np.zeros(H), np.ones(H)))
+    keep = idx[(idx + H - 1 <= idx.max()) & ~np.isnan(raw[idx]).any(axis=1)]
+    if model.multi_stats is None:
+        r = raw[keep]
+        mu = r.mean(axis=0) if len(r) else np.zeros(H)
+        sd = r.std(axis=0) if len(r) else np.ones(H)
+        sd = np.where(sd > 0, sd, 1.0)
+        model.set_multi_stats(mu, sd)
+    mu, sd = (np.asarray(v) for v in model.multi_stats)
+    return keep, ((raw[keep] - mu) / sd).astype(np.float32)
+
+
 def new_model(p: TrainParams, ds: Dataset) -> SilverModel:
     set_seed(p.seed)
-    return build_model(p.algorithm, p.lookback, ds.n_features, p.layers, p.pred_target)
+    return build_model(p.algorithm, p.lookback, ds.n_features, p.layers, p.pred_target, horizon=p.future_days)
 
 
 def walk_forward_cv(ds: Dataset, p: TrainParams, on_fold: Callable[[int, int, str], None] | None = None,
