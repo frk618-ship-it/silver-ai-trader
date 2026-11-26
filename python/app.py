@@ -16,6 +16,26 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+
+def _drop_stale_modules() -> None:
+    """Streamlit Cloud 拉到新版程式時，會重跑 app.py，但可能沿用記憶體裡舊版的 silver_trader。
+    新 app.py 搭配舊模組就會出錯（例如舊 SearchConfig 沒有新參數）。原始檔比載入時新，就整包重新匯入。"""
+    pkg = sys.modules.get("silver_trader")
+    if pkg is None:
+        return
+    loaded = getattr(pkg, "_loaded_at", 0.0)
+    src = Path(__file__).resolve().parent / "silver_trader"
+    try:
+        newest = max(f.stat().st_mtime for f in src.glob("*.py"))
+    except (OSError, ValueError):
+        return
+    if newest > loaded:
+        for name in [n for n in sys.modules if n == "silver_trader" or n.startswith("silver_trader.")]:
+            del sys.modules[name]
+
+
+_drop_stale_modules()
+
 from silver_trader import __version__, agent, config, market, pipeline, storage, ui  # noqa: E402
 from silver_trader.backtest import run_backtest  # noqa: E402
 from silver_trader.config import BacktestConfig, SearchConfig, TrainParams  # noqa: E402
