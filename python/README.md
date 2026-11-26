@@ -59,6 +59,17 @@ Python 版在伺服器上抓資料，**沒有瀏覽器 CORS 的限制**，不需
 - 備份檔只接受固定的幾個檔名。
 - token 只能讀寫指定的那個 repo；外洩時到 GitHub 刪除即可立即失效。
 
+## 📤 匯出預測給其他系統
+
+`python -m silver_trader.export -o silver_ai.json --days 7` 的流程：
+1. 從備份 repo 還原冠軍模型。
+2. 抓最新行情，只預測、不訓練。
+3. 寫出 JSON：逐日預測價、模型資訊、冠軍保留集命中率、影響最大的因子。
+
+需要環境變數 `SILVER_DATA_TOKEN` 與 `SILVER_DATA_REPO`（也接受 `GITHUB_TOKEN` 與 `DATA_REPO`）。
+
+靶材產業新聞網站的「貴金屬價格預警」頁（repo `frk618-ship-it/claude`）會在每個交易日收盤後用它產生白銀的一週預測中心線。
+
 ## 安裝與執行（本機）
 
 需要 Python 3.10 以上。
