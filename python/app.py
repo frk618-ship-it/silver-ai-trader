@@ -298,7 +298,7 @@ def settings_form() -> tuple[TrainParams, dict]:
     layers = c1.select_slider("隱藏單元", [16, 32, 48, 64, 96, 128], value=p.layers)
     if target == "multi":
         future = c2.slider("預測天數 T+N（模型直接輸出）", 2, 10, max(2, p.future_days),
-                           help="模型一次輸出 T+1…T+N；天數在訓練時固定，改天數需要重新訓練")
+                           help="模型一次輸出 T+1…T+N；天數在訓練時固定，改天數需要重新訓練。貴金屬預警頁需要 N ≥ 5 才能涵蓋整週")
     else:
         future = c2.slider("預測天數 T+N（逐日遞迴）", 1, 10, p.future_days)
     years = c3.select_slider("使用資料年數", [1.0, 1.5, 2.0, 3.0, 4.0, 5.0], value=float(p.history_years))
