@@ -54,23 +54,42 @@ class Trial:
 
     def row(self) -> dict:
         p = self.params
-        return {"#": self.idx, "演算法": p.algorithm, "Lookback": p.lookback, "單元": p.layers, "Batch": p.batch_size,
+        return {"#": self.idx, "演算法": p.algorithm, "預測目標": config.PRED_TARGETS.get(p.pred_target, p.pred_target).split("（")[0],
+                "Lookback": p.lookback, "單元": p.layers, "Batch": p.batch_size,
                 "α": p.directional_lambda, "LR": p.lr, "因子數": sum(self.factors.values()) + 1,
                 "驗證 DA%": round(self.da, 2), "驗證 Loss": round(self.loss, 5), "Epochs": self.epochs,
                 "秒": round(self.seconds, 1)}
 
 
+def search_targets(cfg: SearchConfig, base: TrainParams) -> list[str]:
+    t = [x for x in (cfg.targets or []) if x in config.PRED_TARGETS]
+    return list(dict.fromkeys(t)) or [base.pred_target]
+
+
+def _with_target(p: TrainParams, target: str) -> TrainParams:
+    p.pred_target = target
+    if target == "multi" and p.future_days < 2:
+        p.future_days = 5          # 多日報酬率至少要 2 天
+    return p
+
+
 def _generate(i: int, cfg: SearchConfig, base: TrainParams, base_f: dict, prev: list[Trial], rng: random.Random):
     keys = config.OPTIONAL_FACTOR_KEYS
+    targets = search_targets(cfg, base)
     if cfg.strategy == "grid":
-        return TrainParams.from_dict({**base.to_dict(), **GRID[i % len(GRID)]}), dict(base_f)
+        # 預測目標輪流換，每個目標都走過同一套網格
+        g = GRID[(i // len(targets)) % len(GRID)]
+        return _with_target(TrainParams.from_dict({**base.to_dict(), **g}), targets[i % len(targets)]), dict(base_f)
     if cfg.strategy == "bayesian" and len(prev) >= 4:
         best = sorted(prev, key=lambda t: -t.da if cfg.metric == "da" else t.loss)[0]
         tp = {k: (getattr(best.params, k) if rng.random() < 0.6 else rng.choice(v)) for k, v in SPACE.items()}
         f = {k: (best.factors.get(k, True) if rng.random() < 0.7 else rng.random() > 0.3) for k in keys}
-        return TrainParams.from_dict({**base.to_dict(), **tp}), f
+        tgt = best.params.pred_target if best.params.pred_target in targets and rng.random() < 0.6 else rng.choice(targets)
+        return _with_target(TrainParams.from_dict({**base.to_dict(), **tp}), tgt), f
     tp = {k: rng.choice(v) for k, v in SPACE.items()}
-    return TrainParams.from_dict({**base.to_dict(), **tp}), {k: rng.random() > 0.3 for k in keys}
+    # 前幾個試驗先把每個目標各試一次，之後隨機
+    tgt = targets[i] if i < len(targets) else rng.choice(targets)
+    return _with_target(TrainParams.from_dict({**base.to_dict(), **tp}), tgt), {k: rng.random() > 0.3 for k in keys}
 
 
 def run_trial(frame: pd.DataFrame, p: TrainParams, factors: dict, cfg: SearchConfig, idx: int,
@@ -127,7 +146,9 @@ def run_search(frame: pd.DataFrame, base: TrainParams, base_factors: dict, cfg: 
         p, f = _generate(i, cfg, base, base_factors, trials, rng)
         p.seed = None if cfg.seed is None else cfg.seed + i
         try:
-            t = run_trial(frame, p, f, cfg, i + 1, min((x.loss for x in trials), default=float("inf")))
+            # 不同預測目標的 loss 尺度不同，剪枝只和同目標的試驗比
+            same = (x.loss for x in trials if x.params.pred_target == p.pred_target and np.isfinite(x.loss))
+            t = run_trial(frame, p, f, cfg, i + 1, min(same, default=float("inf")))
         except Exception:  # noqa: BLE001
             t = None
         if t:

@@ -153,6 +153,27 @@ def test_search(md):
     assert all(0 <= t.da <= 100 for t in trials)
 
 
+@pytest.mark.parametrize("strategy", ["random", "grid", "bayesian"])
+def test_search_over_prediction_targets(md, strategy):
+    import random as _r
+    from silver_trader.search import _generate
+
+    targets = ["multi", "logreturn", "direction"]
+    cfg = SearchConfig(max_trials=6, strategy=strategy, seed=1, targets=targets)
+    base = TrainParams(pred_target="price", future_days=1)
+    got = [_generate(i, cfg, base, config.default_factors(), [], _r.Random(i))[0] for i in range(6)]
+    assert {p.pred_target for p in got} == set(targets)          # 每個目標都有試到，且不會用到 base 的 price
+    assert all(p.future_days >= 2 for p in got if p.pred_target == "multi")
+    assert _generate(0, SearchConfig(), base, config.default_factors(), [], _r.Random(0))[0].pred_target == "price"
+
+
+def test_search_runs_mixed_targets(md):
+    cfg = SearchConfig(max_trials=3, search_epochs=4, seed=5, targets=["multi", "logreturn", "dual"])
+    trials = run_search(md.frame, TrainParams(), config.default_factors(), cfg)
+    assert {t.params.pred_target for t in trials} == {"multi", "logreturn", "dual"}
+    assert all(0 <= t.da <= 100 for t in trials) and all("預測目標" in t.row() for t in trials)
+
+
 def test_promotion_rules():
     ok, _ = agent.should_promote(None, {"holdout_da": 55, "holdout_n": 30})
     assert ok

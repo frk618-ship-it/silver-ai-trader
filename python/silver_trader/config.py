@@ -139,6 +139,8 @@ class SearchConfig:
     max_samples: int = 520
     patience: int = 8
     seed: int | None = None
+    # 要搜尋的預測目標；None / 空 = 只用目前訓練設定的預測目標
+    targets: list[str] | None = None
 
 
 LIVE_QUOTE_MAX_AGE_HOURS = 96          # 涵蓋週末＋假日休市

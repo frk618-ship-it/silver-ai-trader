@@ -400,11 +400,11 @@ def run_search_ui(cfg: SearchConfig, then_train: bool):
     if not b:
         st.warning("沒有有效的試驗結果。")
         return
-    st.success(f"最佳組合 #{b.idx}：{b.params.algorithm}、lookback {b.params.lookback}、單元 {b.params.layers}、"
+    st.success(f"最佳組合 #{b.idx}：{b.params.algorithm}、{config.PRED_TARGETS[b.params.pred_target]}、lookback {b.params.lookback}、單元 {b.params.layers}、"
                f"驗證 DA {b.da:.1f}%", icon="🏆")
     if then_train:
         newp = TrainParams.from_dict({**b.params.to_dict(), "epochs": ss.params.epochs, "seed": ss.params.seed,
-                                      "future_days": ss.params.future_days, "history_years": ss.params.history_years,
+                                      "future_days": b.params.future_days, "history_years": ss.params.history_years,
                                       "early_stop_patience": ss.params.early_stop_patience or 30})
         ss.params, ss.factors = newp, {**ss.factors, **b.factors}
         persist()
@@ -423,7 +423,14 @@ def tab_search():
     metric = c2.selectbox("排名依據", ["da", "loss"], format_func=lambda s: {"da": "驗證方向準確率", "loss": "驗證 Loss"}[s])
     trials = c3.slider("試驗次數", 3, 60, 15)
     ep = c4.slider("每次 epochs", 10, 200, 60, 10)
-    cfg = SearchConfig(strategy=strategy, metric=metric, max_trials=trials, search_epochs=ep)
+    all_t = list(config.PRED_TARGETS)
+    targets = st.multiselect("預測目標（可多選，每個試驗輪流換）", all_t, default=[ss.params.pred_target],
+                             format_func=lambda k: config.PRED_TARGETS[k],
+                             help="多選時會一起比較不同的預測目標。排名用驗證段的隔日方向準確率；"
+                                  "多日報酬率的天數沿用訓練設定（至少 2 天）")
+    if len(targets) > 1 and metric == "loss":
+        st.warning("不同預測目標的 Loss 尺度不同，無法互相比較；多選預測目標時建議用「驗證方向準確率」排名。", icon="⚠️")
+    cfg = SearchConfig(strategy=strategy, metric=metric, max_trials=trials, search_epochs=ep, targets=targets or None)
     b1, b2 = st.columns(2)
     if b1.button("🔍 只搜尋", width="stretch"):
         run_search_ui(cfg, then_train=False)
